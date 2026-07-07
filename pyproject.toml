@@ -1,0 +1,15 @@
+﻿[project]
+name = "smart-home-project"
+version = "0.1.0"
+description = "Smart home project with integrated face recognition"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "smart-home-face",
+]
+
+[tool.uv.sources]
+smart-home-face = { path = "face-recognition", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["face-recognition/tests"]

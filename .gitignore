@@ -1,0 +1,6 @@
+.venv/
+.test_tmp/
+
+# Local face-recognition model files are too large for normal GitHub commits.
+face-recognition/models/
+face-recognition/authorized_faces_cache.npz
