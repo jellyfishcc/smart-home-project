@@ -31,6 +31,29 @@ class FakeInsightFaceApp:
         return [type("Face", (), {"embedding": np.array([1.0, 0.0, 0.0], dtype=np.float32)})()]
 
 
+class FakeDetectedFace:
+    def __init__(self, embedding, bbox):
+        self.normed_embedding = np.array(embedding, dtype=np.float32)
+        self.bbox = np.array(bbox, dtype=np.float32)
+
+
+class FakeNearestFaceApp:
+    def __init__(self, faces_by_image):
+        self.faces_by_image = faces_by_image
+
+    def get(self, image):
+        return self.faces_by_image[image]
+
+
+class FakeNearestFaceBackend(FakeFaceBackend):
+    def __init__(self, embeddings_by_filename, faces_by_filename):
+        super().__init__(embeddings_by_filename)
+        self.app = FakeNearestFaceApp(faces_by_filename)
+
+    def _read_image(self, image_path):
+        return Path(image_path).name
+
+
 def create_file(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"fake image")
@@ -103,23 +126,30 @@ class LocalFaceAuthorizerTests(unittest.TestCase):
         self.assertEqual(result.result, "NO_FACE")
         self.assertEqual(result.message, "未检测到人脸")
 
-    def test_returns_multi_face_when_input_has_multiple_detected_faces(self):
-        root = self.case_root("returns_multi_face")
+    def test_authorizes_largest_face_when_input_has_multiple_detected_faces(self):
+        root = self.case_root("authorizes_largest_face")
         create_file(root / "authorized_faces" / "person_a" / "a.jpg")
         create_file(root / "group.jpg")
-        backend = FakeFaceBackend(
+        backend = FakeNearestFaceBackend(
             {
                 "a.jpg": [[1.0, 0.0, 0.0]],
-                "group.jpg": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            }
+                "group.jpg": [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+            },
+            {
+                "group.jpg": [
+                    FakeDetectedFace([0.0, 1.0, 0.0], [0.0, 0.0, 10.0, 10.0]),
+                    FakeDetectedFace([1.0, 0.0, 0.0], [0.0, 0.0, 20.0, 20.0]),
+                ],
+            },
         )
 
         authorizer = LocalFaceAuthorizer(root / "authorized_faces", backend, threshold=0.8)
         result = authorizer.verify_image(root / "group.jpg")
 
-        self.assertFalse(result.authorized)
-        self.assertEqual(result.result, "MULTI_FACE")
-        self.assertEqual(result.message, "检测到多人，请单人靠近摄像头")
+        self.assertTrue(result.authorized)
+        self.assertEqual(result.result, "AUTHORIZED")
+        self.assertEqual(result.person["id"], "person_a")
+        self.assertAlmostEqual(result.similarity_score, 1.0)
 
     def test_writes_authorized_face_cache_on_first_startup(self):
         root = self.case_root("writes_cache")

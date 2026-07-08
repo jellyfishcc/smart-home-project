@@ -116,18 +116,13 @@ class LocalFaceAuthorizer:
                 message="未检测到人脸",
             )
 
+        probe_embedding = embeddings[0]
         if len(embeddings) > 1:
-            return VerificationResult(
-                success=True,
-                result="MULTI_FACE",
-                authorized=False,
-                person=None,
-                similarity_score=None,
-                door_action="NONE",
-                message="检测到多人，请单人靠近摄像头",
-            )
+            largest_embedding, _ = self._largest_face_embedding(Path(image_path))
+            if largest_embedding is not None:
+                probe_embedding = largest_embedding
 
-        best_face, best_score = self._best_match(embeddings[0])
+        best_face, best_score = self._best_match(probe_embedding)
         if best_face is not None and best_score >= self.threshold:
             return VerificationResult(
                 success=True,
@@ -193,18 +188,13 @@ class LocalFaceAuthorizer:
                 message="未检测到人脸",
             )
 
+        probe_embedding = embeddings[0]
         if len(embeddings) > 1:
-            return VerificationResult(
-                success=True,
-                result="MULTI_FACE",
-                authorized=False,
-                person=None,
-                similarity_score=None,
-                door_action="NONE",
-                message="检测到多人，请单人靠近摄像头",
-            )
+            largest_embedding, _ = self._largest_face_embedding(Path(image_path))
+            if largest_embedding is not None:
+                probe_embedding = largest_embedding
 
-        best_face, best_score = self._best_match(embeddings[0])
+        best_face, best_score = self._best_match(probe_embedding)
         if best_face is not None and best_score >= self.threshold:
             return VerificationResult(
                 success=True,

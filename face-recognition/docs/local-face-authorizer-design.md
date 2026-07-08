@@ -2,7 +2,7 @@
 
 ## Scope
 
-Implement the first usable face-recognition module for a single input image. The module answers whether the detected face is authorized. GUI, database, camera streaming, and door hardware are intentionally out of scope for this pass.
+Implement the first usable face-recognition module for a single input image. The module answers whether the nearest detected face is authorized. GUI, database, camera streaming, and door hardware are intentionally out of scope for this pass.
 
 ## Authorization Source
 
@@ -24,8 +24,8 @@ Each first-level folder is treated as one authorized person. Every supported ima
 1. Read one input image path.
 2. Extract face embeddings with InsightFace on CPU.
 3. Return `NO_FACE` if the image has no faces.
-4. Return `MULTI_FACE` if the image has more than one face.
-5. Compare the single detected face embedding with all enabled local gallery embeddings by cosine similarity.
+4. If the image has more than one face, choose the face with the largest bounding-box area as the nearest face.
+5. Compare the selected face embedding with all enabled local gallery embeddings by cosine similarity.
 6. Return `AUTHORIZED` when the best score is greater than or equal to `FACE_MATCH_THRESHOLD`.
 7. Return `DENIED` otherwise.
 
