@@ -1,0 +1,249 @@
+{% extends 'base.html' %}
+{% block title %}物体检测{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">物体检测 (YOLO)</div>
+        <div class="page-subtitle">上传图片使用 YOLO 算法识别物体 - 检测到灯泡自动控制灯光</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- 上传检测区 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-cloud-upload"></i> 上传图片检测</h5>
+            {% if yolo_available %}
+            <span class="badge badge-success">YOLOv8 可用</span>
+            {% else %}
+            <span class="badge badge-warning">降级模式 (OpenCV)</span>
+            {% endif %}
+        </div>
+        <div class="card-body">
+            <div class="upload-zone" id="detectUploadZone">
+                <i class="bi bi-image"></i>
+                <p>点击或拖拽上传图片进行物体检测</p>
+                <p class="highlight">YOLOv8 可识别 80 类物体</p>
+                <input type="file" id="detectFileInput" accept="image/*" style="display:none;">
+            </div>
+
+            <div id="detectLoading" style="display:none;text-align:center;padding:30px;">
+                <div class="spinner" style="border-color:rgba(90,122,155,0.3);border-top-color:#5A7A9B;"></div>
+                <p style="margin-top:12px;color:var(--color-text-light);font-size:13px;">正在检测中...</p>
+            </div>
+
+            <div id="detectResultArea" style="display:none;margin-top:16px;">
+                <!-- 结果图片对比 -->
+                <div class="grid-2" style="margin-bottom:16px;">
+                    <div>
+                        <p style="font-size:12px;color:var(--color-text-light);margin-bottom:6px;">原图</p>
+                        <div class="image-preview">
+                            <img id="originalImg" src="" alt="原图">
+                        </div>
+                    </div>
+                    <div>
+                        <p style="font-size:12px;color:var(--color-text-light);margin-bottom:6px;">检测结果</p>
+                        <div class="image-preview">
+                            <img id="resultImg" src="" alt="检测结果">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 检测结果详情 -->
+                <div id="detectDetail"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 可识别类别 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-list-ul"></i> 可识别物体类别</h5>
+            <span class="badge badge-info">80 类</span>
+        </div>
+        <div class="card-body">
+            <div id="classList" style="max-height:400px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:6px;">
+            </div>
+
+            <div style="margin-top:16px;padding:12px;background:rgba(233,180,85,0.1);border-radius:8px;border:1px solid rgba(233,180,85,0.3);">
+                <div style="font-size:13px;font-weight:600;color:var(--color-warning);">
+                    <i class="bi bi-lightbulb"></i> 自定义功能
+                </div>
+                <p style="font-size:12px;color:var(--color-text-light);margin-top:4px;">
+                    检测到灯泡图片时，系统自动控制灯光开启（亮度80%）
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 检测历史记录 -->
+<div class="card" style="margin-top:20px;">
+    <div class="card-header">
+        <h5><i class="bi bi-clock-history"></i> 检测历史记录</h5>
+        <button class="btn btn-outline btn-sm" onclick="loadDetectionRecords(1)">
+            <i class="bi bi-arrow-clockwise"></i> 刷新
+        </button>
+    </div>
+    <div class="card-body" style="padding:0;">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>来源</th>
+                        <th>检测物体</th>
+                        <th>数量</th>
+                        <th>触发动作</th>
+                        <th>结果图</th>
+                    </tr>
+                </thead>
+                <tbody id="detectionLogBody">
+                    <tr><td colspan="6" style="text-align:center;color:var(--color-text-light);padding:30px;">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div id="detectionPagination"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    setupDetectUpload();
+    loadClassList();
+    loadDetectionRecords(1);
+});
+
+const COCO_CLASSES = [
+    'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
+    'traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat',
+    'dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack',
+    'umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball',
+    'kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket',
+    'bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple',
+    'sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake',
+    'chair','couch','potted plant','bed','dining table','toilet','tv','laptop',
+    'mouse','remote','keyboard','cell phone','microwave','oven','toaster','sink',
+    'refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush'
+];
+
+function loadClassList() {
+    const container = document.getElementById('classList');
+    container.innerHTML = COCO_CLASSES.map(cls =>
+        `<span class="badge badge-secondary" style="font-size:11px;">${cls}</span>`
+    ).join('');
+}
+
+function setupDetectUpload() {
+    const zone = document.getElementById('detectUploadZone');
+    const input = document.getElementById('detectFileInput');
+
+    zone.addEventListener('click', () => input.click());
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+    zone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        zone.classList.remove('dragover');
+        if (e.dataTransfer.files.length > 0) handleDetectFile(e.dataTransfer.files[0]);
+    });
+    input.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) handleDetectFile(e.target.files[0]);
+    });
+}
+
+async function handleDetectFile(file) {
+    document.getElementById('detectUploadZone').style.display = 'none';
+    document.getElementById('detectLoading').style.display = 'block';
+    document.getElementById('detectResultArea').style.display = 'none';
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const res = await API.upload('/api/detection/upload', formData);
+        document.getElementById('detectLoading').style.display = 'none';
+        document.getElementById('detectResultArea').style.display = 'block';
+
+        if (res.code === 0) {
+            const d = res.data;
+            document.getElementById('originalImg').src = d.image_url;
+            document.getElementById('resultImg').src = d.result_image_url;
+
+            let html = `<div class="alert alert-success">
+                <i class="bi bi-check-circle-fill"></i>
+                <strong>检测完成</strong> - 共识别到 ${d.count} 个物体
+            </div>`;
+
+            if (d.objects && d.objects.length > 0) {
+                html += '<div style="margin-top:12px;"><p style="font-size:13px;font-weight:600;margin-bottom:8px;">检测详情:</p>';
+                d.objects.forEach((obj, i) => {
+                    const color = obj.class === 'person' ? 'badge-info' : 'badge-secondary';
+                    html += `<div style="display:flex;justify-content:space-between;padding:6px 12px;background:rgba(90,122,155,0.03);border-radius:6px;margin-bottom:4px;">
+                        <span><span class="badge ${color}">${obj.class}</span> <span style="font-size:12px;color:var(--color-text-light);">置信度: ${(obj.confidence * 100).toFixed(1)}%</span></span>
+                    </div>`;
+                });
+                html += '</div>';
+            }
+
+            if (d.triggered_actions) {
+                html += '<div class="alert alert-warning" style="margin-top:12px;"><i class="bi bi-exclamation-triangle-fill"></i><div>';
+                d.triggered_actions.forEach(a => {
+                    html += `<div><strong>${escapeHtml(a.description)}</strong>${a.executed ? ' <span class="badge badge-success">已执行</span>' : ''}</div>`;
+                });
+                html += '</div></div>';
+            }
+
+            document.getElementById('detectDetail').innerHTML = html;
+            showToast(`检测完成，识别到 ${d.count} 个物体`, 'success');
+            loadDetectionRecords(1);
+        } else {
+            showToast(res.message || '检测失败', 'error');
+            resetDetectUpload();
+        }
+    } catch (e) {
+        showToast('网络错误', 'error');
+        resetDetectUpload();
+    }
+}
+
+function resetDetectUpload() {
+    document.getElementById('detectUploadZone').style.display = 'block';
+    document.getElementById('detectLoading').style.display = 'none';
+    document.getElementById('detectResultArea').style.display = 'none';
+    document.getElementById('detectFileInput').value = '';
+}
+
+async function loadDetectionRecords(page) {
+    try {
+        const res = await API.get(`/api/detection/records?page=${page}&per_page=15`);
+        if (res.code === 0) {
+            const tbody = document.getElementById('detectionLogBody');
+            if (res.data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-text-light);padding:30px;">暂无记录</td></tr>';
+            } else {
+                tbody.innerHTML = res.data.map(r => {
+                    const objects = (r.objects_detected || []).map(o => o.class);
+                    const objStr = objects.length > 0 ? objects.join(', ') : '无';
+                    const action = r.triggered_action ? '<span class="badge badge-warning">有</span>' : '<span class="badge badge-secondary">无</span>';
+                    const img = r.result_image_path ? `<a href="${r.result_image_path}" target="_blank" class="btn btn-outline btn-sm">查看</a>` : '-';
+                    return `<tr>
+                        <td style="font-size:12px;">${formatTime(r.detected_at)}</td>
+                        <td><span class="badge badge-info">${r.source}</span></td>
+                        <td style="font-size:12px;">${escapeHtml(objStr)}</td>
+                        <td>${r.object_count}</td>
+                        <td>${action}</td>
+                        <td>${img}</td>
+                    </tr>`;
+                }).join('');
+            }
+            renderPagination(document.getElementById('detectionPagination'), page, res.pages, 'loadDetectionRecords');
+        }
+    } catch (e) {
+        console.error('加载检测记录失败:', e);
+    }
+}
+</script>
+{% endblock %}

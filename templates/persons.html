@@ -1,0 +1,339 @@
+{% extends 'base.html' %}
+{% block title %}人员管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">授权人员管理</div>
+        <div class="page-subtitle">管理门禁授权人员信息 - 支持2真1假身份验证</div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="showAddModal()">
+        <i class="bi bi-person-plus"></i> 添加人员
+    </button>
+</div>
+
+<!-- 统计卡片 -->
+<div class="grid-3" style="margin-bottom:20px;">
+    <div class="stat-card">
+        <div class="stat-icon person" style="background:linear-gradient(135deg,#D4ECDD,#6BAA75);color:#2D5C3A;">
+            <i class="bi bi-person-check"></i>
+        </div>
+        <div class="stat-info">
+            <h3 id="authorizedCount">--</h3>
+            <p>真实授权人员 (2真)</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon person" style="background:linear-gradient(135deg,#FADBD8,#E07A7A);color:#8B3A3A;">
+            <i class="bi bi-person-x"></i>
+        </div>
+        <div class="stat-info">
+            <h3 id="fakeCount">--</h3>
+            <p>伪造/未授权 (1假)</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon person"><i class="bi bi-people"></i></div>
+        <div class="stat-info">
+            <h3 id="totalCount">--</h3>
+            <p>总人数</p>
+        </div>
+    </div>
+</div>
+
+<!-- 人员列表 -->
+<div class="card">
+    <div class="card-header">
+        <h5><i class="bi bi-list-ul"></i> 人员列表</h5>
+        <button class="btn btn-outline btn-sm" onclick="loadPersons()">
+            <i class="bi bi-arrow-clockwise"></i> 刷新
+        </button>
+    </div>
+    <div class="card-body" style="padding:0;">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>姓名</th>
+                        <th>工号</th>
+                        <th>角色</th>
+                        <th>部门</th>
+                        <th>电话</th>
+                        <th>人脸</th>
+                        <th>授权状态</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="personTableBody">
+                    <tr><td colspan="9" style="text-align:center;color:var(--color-text-light);padding:30px;">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 添加/编辑人员模态框 -->
+<div class="modal-overlay" id="personModal">
+    <div class="modal-box">
+        <div class="modal-header">
+            <h5 id="modalTitle">添加授权人员</h5>
+            <button class="btn btn-outline btn-sm" onclick="closeModal()"><i class="bi bi-x"></i></button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="editPersonId">
+            <div class="form-group">
+                <label>姓名 *</label>
+                <input type="text" class="form-control" id="personName" placeholder="请输入姓名">
+            </div>
+            <div class="form-group">
+                <label>工号</label>
+                <input type="text" class="form-control" id="personEmployeeId" placeholder="如 EMP001">
+            </div>
+            <div class="grid-2">
+                <div class="form-group">
+                    <label>角色</label>
+                    <input type="text" class="form-control" id="personRole" placeholder="如 管理员/成员" value="成员">
+                </div>
+                <div class="form-group">
+                    <label>部门</label>
+                    <input type="text" class="form-control" id="personDepartment" placeholder="如 研发部">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>联系电话</label>
+                <input type="text" class="form-control" id="personPhone" placeholder="如 13800138000">
+            </div>
+            <div class="form-group">
+                <label>身份类型</label>
+                <select class="form-control" id="personType">
+                    <option value="real">真实授权 (2真)</option>
+                    <option value="fake">伪造/未授权 (1假)</option>
+                </select>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" onclick="closeModal()">取消</button>
+            <button class="btn btn-primary" onclick="savePerson()">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 人脸注册模态框 -->
+<div class="modal-overlay" id="faceModal">
+    <div class="modal-box">
+        <div class="modal-header">
+            <h5>注册人脸 - <span id="faceModalName"></span></h5>
+            <button class="btn btn-outline btn-sm" onclick="closeFaceModal()"><i class="bi bi-x"></i></button>
+        </div>
+        <div class="modal-body">
+            <div class="upload-zone" id="faceRegZone">
+                <i class="bi bi-cloud-arrow-up"></i>
+                <p>上传人脸照片（单人正面照）</p>
+                <p class="highlight">支持 JPG / PNG / BMP / WEBP 格式</p>
+                <input type="file" id="faceRegInput" accept="image/*" style="display:none;">
+            </div>
+            <div id="faceRegResult" style="display:none;margin-top:16px;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" onclick="closeFaceModal()">关闭</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let currentFacePersonId = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadPersons();
+    setupFaceRegUpload();
+});
+
+async function loadPersons() {
+    try {
+        const res = await API.get('/api/persons');
+        if (res.code === 0) {
+            const persons = res.data;
+            const real = persons.filter(p => !p.is_fake && p.is_authorized);
+            const fake = persons.filter(p => p.is_fake);
+            document.getElementById('authorizedCount').textContent = real.length;
+            document.getElementById('fakeCount').textContent = fake.length;
+            document.getElementById('totalCount').textContent = persons.length;
+
+            const tbody = document.getElementById('personTableBody');
+            tbody.innerHTML = persons.map(p => {
+                let statusBadge;
+                if (p.is_fake) {
+                    statusBadge = '<span class="badge badge-danger"><i class="bi bi-x-circle"></i> 假身份</span>';
+                } else if (p.is_authorized) {
+                    statusBadge = '<span class="badge badge-success"><i class="bi bi-check-circle"></i> 已授权</span>';
+                } else {
+                    statusBadge = '<span class="badge badge-warning">未授权</span>';
+                }
+                const faceBadge = p.face_image_path
+                    ? '<span class="badge badge-success">已注册</span>'
+                    : '<span class="badge badge-secondary">未注册</span>';
+                return `<tr>
+                    <td>${p.id}</td>
+                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                    <td style="font-size:12px;">${escapeHtml(p.employee_id)}</td>
+                    <td>${escapeHtml(p.role)}</td>
+                    <td>${escapeHtml(p.department || '-')}</td>
+                    <td style="font-size:12px;">${escapeHtml(p.phone || '-')}</td>
+                    <td>${faceBadge}</td>
+                    <td>${statusBadge}</td>
+                    <td>
+                        <button class="btn btn-outline btn-sm" onclick="showFaceModal(${p.id}, '${escapeHtml(p.name)}')" title="注册人脸">
+                            <i class="bi bi-face"></i>
+                        </button>
+                        <button class="btn btn-outline btn-sm" onclick="editPerson(${p.id})" title="编辑">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="btn btn-danger btn-sm" onclick="deletePerson(${p.id}, '${escapeHtml(p.name)}')" title="删除">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
+    } catch (e) {
+        console.error('加载人员失败:', e);
+        showToast('加载失败', 'error');
+    }
+}
+
+function showAddModal() {
+    document.getElementById('modalTitle').textContent = '添加授权人员';
+    document.getElementById('editPersonId').value = '';
+    document.getElementById('personName').value = '';
+    document.getElementById('personEmployeeId').value = '';
+    document.getElementById('personRole').value = '成员';
+    document.getElementById('personDepartment').value = '';
+    document.getElementById('personPhone').value = '';
+    document.getElementById('personType').value = 'real';
+    document.getElementById('personModal').classList.add('show');
+}
+
+async function editPerson(id) {
+    try {
+        const res = await API.get(`/api/persons/${id}`);
+        if (res.code === 0) {
+            const p = res.data;
+            document.getElementById('modalTitle').textContent = '编辑人员';
+            document.getElementById('editPersonId').value = p.id;
+            document.getElementById('personName').value = p.name;
+            document.getElementById('personEmployeeId').value = p.employee_id;
+            document.getElementById('personRole').value = p.role;
+            document.getElementById('personDepartment').value = p.department || '';
+            document.getElementById('personPhone').value = p.phone || '';
+            document.getElementById('personType').value = p.is_fake ? 'fake' : 'real';
+            document.getElementById('personModal').classList.add('show');
+        }
+    } catch (e) {
+        showToast('加载失败', 'error');
+    }
+}
+
+function closeModal() {
+    document.getElementById('personModal').classList.remove('show');
+}
+
+async function savePerson() {
+    const name = document.getElementById('personName').value.trim();
+    if (!name) {
+        showToast('请输入姓名', 'warning');
+        return;
+    }
+    const isFake = document.getElementById('personType').value === 'fake';
+    const data = {
+        name: name,
+        employee_id: document.getElementById('personEmployeeId').value.trim() || `EMP${Date.now()}`,
+        role: document.getElementById('personRole').value.trim() || '成员',
+        department: document.getElementById('personDepartment').value.trim(),
+        phone: document.getElementById('personPhone').value.trim(),
+        is_authorized: !isFake,
+        is_fake: isFake,
+    };
+
+    const editId = document.getElementById('editPersonId').value;
+    try {
+        if (editId) {
+            await API.put(`/api/persons/${editId}`, data);
+            showToast('更新成功', 'success');
+        } else {
+            await API.post('/api/persons', data);
+            showToast('添加成功', 'success');
+        }
+        closeModal();
+        loadPersons();
+    } catch (e) {
+        showToast('保存失败', 'error');
+    }
+}
+
+async function deletePerson(id, name) {
+    if (!confirm(`确定要删除 "${name}" 吗？此操作不可恢复。`)) return;
+    try {
+        await API.del(`/api/persons/${id}`);
+        showToast('删除成功', 'success');
+        loadPersons();
+    } catch (e) {
+        showToast('删除失败', 'error');
+    }
+}
+
+// 人脸注册
+function showFaceModal(personId, personName) {
+    currentFacePersonId = personId;
+    document.getElementById('faceModalName').textContent = personName;
+    document.getElementById('faceModal').classList.add('show');
+    document.getElementById('faceRegResult').style.display = 'none';
+    document.getElementById('faceRegZone').style.display = 'block';
+    document.getElementById('faceRegInput').value = '';
+}
+
+function closeFaceModal() {
+    document.getElementById('faceModal').classList.remove('show');
+    currentFacePersonId = null;
+}
+
+function setupFaceRegUpload() {
+    const zone = document.getElementById('faceRegZone');
+    const input = document.getElementById('faceRegInput');
+    zone.addEventListener('click', () => input.click());
+    input.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) handleFaceReg(e.target.files[0]);
+    });
+}
+
+async function handleFaceReg(file) {
+    document.getElementById('faceRegZone').style.display = 'none';
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const res = await API.upload(`/api/persons/${currentFacePersonId}/register-face`, formData);
+        const resultDiv = document.getElementById('faceRegResult');
+        resultDiv.style.display = 'block';
+
+        if (res.code === 0) {
+            resultDiv.innerHTML = `<div class="alert alert-success">
+                <i class="bi bi-check-circle-fill"></i> ${res.message}
+            </div>`;
+            showToast('人脸注册成功', 'success');
+            loadPersons();
+        } else {
+            resultDiv.innerHTML = `<div class="alert alert-danger">
+                <i class="bi bi-x-circle-fill"></i> ${res.message}
+            </div>`;
+            document.getElementById('faceRegZone').style.display = 'block';
+        }
+    } catch (e) {
+        showToast('上传失败', 'error');
+        document.getElementById('faceRegZone').style.display = 'block';
+    }
+}
+</script>
+{% endblock %}

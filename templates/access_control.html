@@ -1,0 +1,297 @@
+{% extends 'base.html' %}
+{% block title %}门禁管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">门禁管理</div>
+        <div class="page-subtitle">人脸识别开门 - 支持2真1假授权验证</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- 人脸识别区 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-face"></i> 人脸识别开门</h5>
+            <span class="badge badge-info">活体检测已启用</span>
+        </div>
+        <div class="card-body">
+            <div class="upload-zone" id="faceUploadZone">
+                <i class="bi bi-cloud-arrow-up"></i>
+                <p>点击或拖拽上传人脸照片进行识别</p>
+                <p class="highlight">支持 JPG / PNG / BMP / WEBP 格式</p>
+                <input type="file" id="faceFileInput" accept="image/*" style="display:none;">
+            </div>
+
+            <div id="faceResultArea" style="display:none;margin-top:16px;">
+                <div class="image-preview" style="margin-bottom:12px;">
+                    <img id="facePreviewImg" src="" alt="预览">
+                </div>
+
+                <div id="faceResultBox"></div>
+            </div>
+
+            <div id="faceLoading" style="display:none;text-align:center;padding:30px;">
+                <div class="spinner" style="border-color:rgba(90,122,155,0.3);border-top-color:#5A7A9B;"></div>
+                <p style="margin-top:12px;color:var(--color-text-light);font-size:13px;">正在识别中...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 授权人员概览 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-person-check"></i> 授权人员状态</h5>
+            <a href="/persons" class="btn btn-outline btn-sm">管理</a>
+        </div>
+        <div class="card-body">
+            <div id="personOverview">
+                <div style="text-align:center;padding:20px;color:var(--color-text-light);">
+                    <i class="bi bi-people" style="font-size:36px;"></i>
+                    <p style="margin-top:8px;font-size:13px;">加载中...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 门禁日志 -->
+<div class="card" style="margin-top:20px;">
+    <div class="card-header">
+        <h5><i class="bi bi-clock-history"></i> 门禁访问日志</h5>
+        <div style="display:flex;gap:8px;align-items:center;">
+            <select class="form-control" id="logFilter" style="width:auto;font-size:12px;padding:5px 10px;" onchange="loadAccessLogs(1)">
+                <option value="">全部记录</option>
+                <option value="granted">允许进入</option>
+                <option value="denied">拒绝</option>
+                <option value="unknown">未知</option>
+            </select>
+            <button class="btn btn-outline btn-sm" onclick="loadAccessLogs(currentPage)">
+                <i class="bi bi-arrow-clockwise"></i> 刷新
+            </button>
+        </div>
+    </div>
+    <div class="card-body" style="padding:0;">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>人员</th>
+                        <th>识别结果</th>
+                        <th>相似度</th>
+                        <th>方式</th>
+                        <th>详情</th>
+                    </tr>
+                </thead>
+                <tbody id="accessLogBody">
+                    <tr><td colspan="6" style="text-align:center;color:var(--color-text-light);padding:30px;">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div id="accessPagination"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let currentPage = 1;
+
+document.addEventListener('DOMContentLoaded', () => {
+    setupFaceUpload();
+    loadPersonOverview();
+    loadAccessLogs(1);
+});
+
+// 人脸上传
+function setupFaceUpload() {
+    const zone = document.getElementById('faceUploadZone');
+    const input = document.getElementById('faceFileInput');
+
+    zone.addEventListener('click', () => input.click());
+
+    zone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        zone.classList.add('dragover');
+    });
+
+    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+
+    zone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        zone.classList.remove('dragover');
+        if (e.dataTransfer.files.length > 0) {
+            handleFaceFile(e.dataTransfer.files[0]);
+        }
+    });
+
+    input.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleFaceFile(e.target.files[0]);
+        }
+    });
+}
+
+function formatSimilarity(value) {
+    if (value === null || value === undefined || value === '') {
+        return '-';
+    }
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) {
+        return '-';
+    }
+    return `${(numeric * 100).toFixed(1)}%`;
+}
+
+async function handleFaceFile(file) {
+    document.getElementById('faceUploadZone').style.display = 'none';
+    document.getElementById('faceLoading').style.display = 'block';
+    document.getElementById('faceResultArea').style.display = 'none';
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const res = await API.upload('/api/access/recognize', formData);
+        document.getElementById('faceLoading').style.display = 'none';
+        document.getElementById('faceResultArea').style.display = 'block';
+
+        if (res.code === 0) {
+            const d = res.data;
+            document.getElementById('facePreviewImg').src = d.image_url;
+
+            let resultHtml = '';
+            if (d.access_result === 'granted') {
+                resultHtml = `
+                    <div class="alert alert-success">
+                        <i class="bi bi-check-circle-fill" style="font-size:18px;"></i>
+                        <div>
+                            <strong>门禁已开启</strong> - 欢迎回来，${escapeHtml(d.person_name || '授权人员')}
+                            <div style="font-size:12px;margin-top:4px;">相似度: ${formatSimilarity(d.confidence)} | 活体检测: ${d.liveness.is_live ? '通过' : '未通过'} (${d.liveness.score}分)</div>
+                        </div>
+                    </div>`;
+            } else if (d.access_result === 'denied') {
+                resultHtml = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-x-circle-fill" style="font-size:18px;"></i>
+                        <div>
+                            <strong>门禁拒绝</strong> - ${escapeHtml(d.detail)}
+                            <div style="font-size:12px;margin-top:4px;">检测到 ${d.faces_detected} 张人脸 | 相似度: ${formatSimilarity(d.confidence)}</div>
+                        </div>
+                    </div>`;
+            } else {
+                resultHtml = `
+                    <div class="alert alert-warning">
+                        <i class="bi bi-question-circle-fill" style="font-size:18px;"></i>
+                        <div>
+                            <strong>未识别</strong> - ${escapeHtml(d.detail)}
+                        </div>
+                    </div>`;
+            }
+            document.getElementById('faceResultBox').innerHTML = resultHtml;
+            showToast('识别完成', d.access_result === 'granted' ? 'success' : 'warning');
+            loadAccessLogs(currentPage);
+        } else {
+            showToast(res.message || '识别失败', 'error');
+            resetFaceUpload();
+        }
+    } catch (e) {
+        showToast('网络错误', 'error');
+        resetFaceUpload();
+    }
+}
+
+function resetFaceUpload() {
+    document.getElementById('faceUploadZone').style.display = 'block';
+    document.getElementById('faceLoading').style.display = 'none';
+    document.getElementById('faceResultArea').style.display = 'none';
+    document.getElementById('faceFileInput').value = '';
+}
+
+// 加载授权人员概览
+async function loadPersonOverview() {
+    try {
+        const res = await API.get('/api/persons');
+        if (res.code === 0) {
+            const persons = res.data;
+            const real = persons.filter(p => !p.is_fake && p.is_authorized);
+            const fake = persons.filter(p => p.is_fake);
+
+            let html = `
+                <div class="grid-2" style="margin-bottom:16px;">
+                    <div style="text-align:center;padding:12px;background:rgba(107,170,117,0.1);border-radius:8px;">
+                        <h3 style="color:var(--color-success);margin:0;">${real.length}</h3>
+                        <p style="font-size:12px;color:var(--color-text-light);margin:4px 0 0;">真实授权人员</p>
+                    </div>
+                    <div style="text-align:center;padding:12px;background:rgba(224,122,122,0.1);border-radius:8px;">
+                        <h3 style="color:var(--color-danger);margin:0;">${fake.length}</h3>
+                        <p style="font-size:12px;color:var(--color-text-light);margin:4px 0 0;">伪造/未授权</p>
+                    </div>
+                </div>
+                <div style="max-height:200px;overflow-y:auto;">
+            `;
+
+            persons.forEach(p => {
+                const badge = p.is_fake
+                    ? '<span class="badge badge-danger">假身份</span>'
+                    : p.is_authorized
+                        ? '<span class="badge badge-success">已授权</span>'
+                        : '<span class="badge badge-warning">未授权</span>';
+                const hasFace = p.face_image_path
+                    ? '<i class="bi bi-check-circle-fill" style="color:var(--color-success);"></i>'
+                    : '<i class="bi bi-x-circle" style="color:var(--color-text-light);"></i>';
+                html += `
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--color-border);">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            ${hasFace}
+                            <span style="font-size:13px;">${escapeHtml(p.name)}</span>
+                        </div>
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <span style="font-size:11px;color:var(--color-text-light);">${p.employee_id}</span>
+                            ${badge}
+                        </div>
+                    </div>`;
+            });
+
+            html += '</div>';
+            document.getElementById('personOverview').innerHTML = html;
+        }
+    } catch (e) {
+        console.error('加载人员概览失败:', e);
+    }
+}
+
+// 加载门禁日志
+async function loadAccessLogs(page) {
+    currentPage = page;
+    const filter = document.getElementById('logFilter').value;
+    const url = `/api/access/logs?page=${page}&per_page=15${filter ? '&result=' + filter : ''}`;
+
+    try {
+        const res = await API.get(url);
+        if (res.code === 0) {
+            const tbody = document.getElementById('accessLogBody');
+            if (res.data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-text-light);padding:30px;">暂无记录</td></tr>';
+            } else {
+                tbody.innerHTML = res.data.map(log => `
+                    <tr>
+                        <td style="font-size:12px;">${formatTime(log.access_time)}</td>
+                        <td>${escapeHtml(log.person_name || '未知')}</td>
+                        <td>${statusBadge(log.access_result)}</td>
+                        <td style="font-size:12px;">${formatSimilarity(log.confidence)}</td>
+                        <td><span class="badge badge-info">${escapeHtml(log.method || '-')}</span></td>
+                        <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(log.detail || '-')}</td>
+                    </tr>
+                `).join('');
+            }
+            renderPagination(document.getElementById('accessPagination'), page, res.pages, 'loadAccessLogs');
+        }
+    } catch (e) {
+        console.error('加载日志失败:', e);
+    }
+}
+</script>
+{% endblock %}

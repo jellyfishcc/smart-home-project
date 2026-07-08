@@ -1,0 +1,179 @@
+{% extends 'base.html' %}
+{% block title %}系统仪表盘{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">系统仪表盘</div>
+        <div class="page-subtitle"><span class="live-dot"></span> 实时监控智能家居系统运行状态</div>
+    </div>
+    <button class="btn btn-outline btn-sm" onclick="loadDashboard()">
+        <i class="bi bi-arrow-clockwise"></i> 刷新
+    </button>
+</div>
+
+<!-- 状态卡片 -->
+<div class="grid-4" style="margin-bottom:20px;">
+    <div class="stat-card">
+        <div class="stat-icon temp"><i class="bi bi-thermometer-half"></i></div>
+        <div class="stat-info">
+            <h3 id="tempValue">--°C</h3>
+            <p>室内温度</p>
+            <div class="stat-trend normal" id="tempTrend">等待数据...</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon light"><i class="bi bi-lightbulb"></i></div>
+        <div class="stat-info">
+            <h3 id="lightValue">--%</h3>
+            <p>灯光亮度</p>
+            <div class="stat-trend normal" id="lightStatus">关闭</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon door"><i class="bi bi-door-closed"></i></div>
+        <div class="stat-info">
+            <h3 id="doorValue">--</h3>
+            <p>门禁状态</p>
+            <div class="stat-trend normal" id="doorStatus">--</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon window"><i class="bi bi-window"></i></div>
+        <div class="stat-info">
+            <h3 id="windowValue">--</h3>
+            <p>窗户状态</p>
+            <div class="stat-trend normal" id="windowStatus">--</div>
+        </div>
+    </div>
+</div>
+
+<!-- 第二行状态卡片 -->
+<div class="grid-4" style="margin-bottom:20px;">
+    <div class="stat-card">
+        <div class="stat-icon fan"><i class="bi bi-fan"></i></div>
+        <div class="stat-info">
+            <h3 id="fanValue">--</h3>
+            <p>风扇状态</p>
+            <div class="stat-trend normal" id="fanStatus">--</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon ac"><i class="bi bi-snow"></i></div>
+        <div class="stat-info">
+            <h3 id="acValue">--</h3>
+            <p>空调状态</p>
+            <div class="stat-trend normal" id="acStatus">--</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon person"><i class="bi bi-person-check"></i></div>
+        <div class="stat-info">
+            <h3 id="personCount">--</h3>
+            <p>授权人员</p>
+            <div class="stat-trend normal" id="personDetail">--</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon camera"><i class="bi bi-camera-video"></i></div>
+        <div class="stat-info">
+            <h3 id="detectCount">--</h3>
+            <p>检测记录</p>
+            <div class="stat-trend normal">YOLO 物体检测</div>
+        </div>
+    </div>
+</div>
+
+<!-- 温度趋势图 + 门禁记录 -->
+<div class="grid-2">
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-graph-up"></i> 温度趋势 (24小时)</h5>
+            <span class="badge badge-info">实时</span>
+        </div>
+        <div class="card-body">
+            <canvas id="tempChart" height="180"></canvas>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-clock-history"></i> 最近门禁记录</h5>
+            <a href="/access" class="btn btn-outline btn-sm">查看全部</a>
+        </div>
+        <div class="card-body" style="padding:0;">
+            <div class="table-container">
+                <table id="recentAccessTable">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>人员</th>
+                            <th>结果</th>
+                            <th>置信度</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recentAccessBody">
+                        <tr><td colspan="4" style="text-align:center;color:var(--color-text-light);padding:30px;">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 最近检测记录 + 灯光使用摘要 -->
+<div class="grid-2" style="margin-top:20px;">
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-image"></i> 最近检测记录</h5>
+            <a href="/detection" class="btn btn-outline btn-sm">查看全部</a>
+        </div>
+        <div class="card-body" style="padding:0;">
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>检测物体</th>
+                            <th>数量</th>
+                            <th>触发动作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recentDetectBody">
+                        <tr><td colspan="4" style="text-align:center;color:var(--color-text-light);padding:30px;">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-lightbulb"></i> 灯光使用摘要</h5>
+            <a href="/analysis" class="btn btn-outline btn-sm">详细分析</a>
+        </div>
+        <div class="card-body">
+            <div class="grid-2" style="gap:12px;">
+                <div style="padding:12px;background:rgba(233,180,85,0.08);border-radius:8px;text-align:center;">
+                    <div style="font-size:20px;font-weight:700;color:var(--color-warning);" id="dashLightHours">--</div>
+                    <div style="font-size:11px;color:var(--color-text-light);">今日开灯时长</div>
+                </div>
+                <div style="padding:12px;background:rgba(107,170,117,0.08);border-radius:8px;text-align:center;">
+                    <div style="font-size:20px;font-weight:700;color:var(--color-success);" id="dashLightEnergy">--</div>
+                    <div style="font-size:11px;color:var(--color-text-light);">今日能耗</div>
+                </div>
+                <div style="padding:12px;background:rgba(106,156,184,0.08);border-radius:8px;text-align:center;">
+                    <div style="font-size:20px;font-weight:700;color:var(--color-info);" id="dashLightCount">--</div>
+                    <div style="font-size:11px;color:var(--color-text-light);">操作次数</div>
+                </div>
+                <div style="padding:12px;background:rgba(224,122,122,0.08);border-radius:8px;text-align:center;">
+                    <div style="font-size:20px;font-weight:700;color:var(--color-danger);" id="dashLightAvg">--</div>
+                    <div style="font-size:11px;color:var(--color-text-light);">平均亮度</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

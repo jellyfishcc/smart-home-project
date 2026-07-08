@@ -1,0 +1,649 @@
+{% extends 'base.html' %}
+{% block title %}数据分析{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">数据统计与分析</div>
+        <div class="page-subtitle">温度趋势、设备状态统计、门禁记录分析</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <select class="form-control" id="timeRange" style="width:auto;font-size:12px;padding:6px 12px;" onchange="loadAllCharts()">
+            <option value="6">最近6小时</option>
+            <option value="12">最近12小时</option>
+            <option value="24" selected>最近24小时</option>
+            <option value="48">最近48小时</option>
+            <option value="168">最近7天</option>
+        </select>
+    </div>
+</div>
+
+<!-- 温度统计卡片 -->
+<div class="grid-4" style="margin-bottom:20px;">
+    <div class="stat-card">
+        <div class="stat-icon temp"><i class="bi bi-thermometer-half"></i></div>
+        <div class="stat-info">
+            <h3 id="tempAvg">--°C</h3>
+            <p>平均温度</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon temp" style="background:linear-gradient(135deg,#FADBD8,#E07A7A);color:#8B3A3A;"><i class="bi bi-thermometer-sun"></i></div>
+        <div class="stat-info">
+            <h3 id="tempMax">--°C</h3>
+            <p>最高温度</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon temp" style="background:linear-gradient(135deg,#D6EAF8,#6A9CB8);color:#1A4D6B;"><i class="bi bi-thermometer-snow"></i></div>
+        <div class="stat-info">
+            <h3 id="tempMin">--°C</h3>
+            <p>最低温度</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon fan"><i class="bi bi-fan"></i></div>
+        <div class="stat-info">
+            <h3 id="fanCount">--</h3>
+            <p>风扇激活次数</p>
+        </div>
+    </div>
+</div>
+
+<!-- 温度趋势图 -->
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-header">
+        <h5><i class="bi bi-graph-up"></i> 温度变化趋势</h5>
+        <span class="badge badge-info">含风扇激活标记</span>
+    </div>
+    <div class="card-body">
+        <canvas id="tempTrendChart" height="80"></canvas>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- 设备状态统计 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-pie-chart"></i> 设备状态统计</h5>
+        </div>
+        <div class="card-body">
+            <canvas id="deviceStatusChart" height="200"></canvas>
+        </div>
+    </div>
+
+    <!-- 门禁访问统计 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-bar-chart"></i> 门禁访问统计</h5>
+        </div>
+        <div class="card-body">
+            <canvas id="accessChart" height="200"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- 湿度趋势图 -->
+<div class="card" style="margin-top:20px;">
+    <div class="card-header">
+        <h5><i class="bi bi-droplet"></i> 湿度变化趋势</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="humidityChart" height="80"></canvas>
+    </div>
+</div>
+
+<!-- 灯光使用分析 -->
+<div class="grid-4" style="margin-top:20px;">
+    <div class="stat-card">
+        <div class="stat-icon light"><i class="bi bi-clock-fill"></i></div>
+        <div class="stat-info">
+            <h3 id="lightTotalHours">--h</h3>
+            <p>累计开灯时长</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon light" style="background:linear-gradient(135deg,#FDEBD0,#E9B455);color:#8B6914;"><i class="bi bi-lightbulb-fill"></i></div>
+        <div class="stat-info">
+            <h3 id="lightAvgBrightness">--%</h3>
+            <p>平均亮度</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon light" style="background:linear-gradient(135deg,#D5F5E3,#6BAA75);color:#1A4D2E;"><i class="bi bi-lightning-charge-fill"></i></div>
+        <div class="stat-info">
+            <h3 id="lightEnergy">--Wh</h3>
+            <p>累计能耗</p>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon light" style="background:linear-gradient(135deg,#D6EAF8,#6A9CB8);color:#1A4D6B;"><i class="bi bi-graph-up"></i></div>
+        <div class="stat-info">
+            <h3 id="lightOpCount">--</h3>
+            <p>操作次数</p>
+        </div>
+    </div>
+</div>
+
+<div class="grid-2" style="margin-top:20px;">
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-lightbulb"></i> 灯光亮度变化趋势</h5>
+        </div>
+        <div class="card-body">
+            <canvas id="lightBrightnessChart" height="200"></canvas>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-pie-chart"></i> 灯光操作来源分布</h5>
+        </div>
+        <div class="card-body">
+            <canvas id="lightSourceChart" height="200"></canvas>
+        </div>
+    </div>
+</div>
+
+<div class="card" style="margin-top:20px;">
+    <div class="card-header">
+        <h5><i class="bi bi-calendar-week"></i> 每日灯光使用汇总</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="lightDailyChart" height="80"></canvas>
+    </div>
+</div>
+
+<!-- 详细统计表格 -->
+<div class="grid-2" style="margin-top:20px;">
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-table"></i> 温度数据明细</h5>
+        </div>
+        <div class="card-body" style="padding:0;">
+            <div class="table-container" style="max-height:300px;overflow-y:auto;">
+                <table>
+                    <thead>
+                        <tr><th>时间</th><th>温度</th><th>湿度</th><th>风扇</th></tr>
+                    </thead>
+                    <tbody id="tempDetailBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-table"></i> 灯光操作明细</h5>
+        </div>
+        <div class="card-body" style="padding:0;">
+            <div class="table-container" style="max-height:300px;overflow-y:auto;">
+                <table>
+                    <thead>
+                        <tr><th>时间</th><th>状态</th><th>亮度</th><th>来源</th></tr>
+                    </thead>
+                    <tbody id="lightDetailBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="grid-2" style="margin-top:20px;">
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-table"></i> 设备操作汇总</h5>
+        </div>
+        <div class="card-body" style="padding:0;">
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr><th>设备</th><th>总操作</th><th>开启次数</th><th>开启率</th></tr>
+                    </thead>
+                    <tbody id="deviceSummaryBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let tempTrendChart = null, deviceStatusChart = null, accessChart = null, humidityChart = null;
+let lightBrightnessChart = null, lightSourceChart = null, lightDailyChart = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadAllCharts();
+});
+
+async function loadAllCharts() {
+    await Promise.all([
+        loadTempAnalysis(),
+        loadDeviceSummary(),
+        loadAccessStats(),
+        loadLightingAnalysis()
+    ]);
+}
+
+async function loadTempAnalysis() {
+    const hours = document.getElementById('timeRange').value;
+    try {
+        const res = await API.get(`/api/history/temperature?hours=${hours}`);
+        if (res.code === 0) {
+            const stats = res.stats;
+            document.getElementById('tempAvg').textContent = stats.avg + '°C';
+            document.getElementById('tempMax').textContent = stats.max + '°C';
+            document.getElementById('tempMin').textContent = stats.min + '°C';
+            document.getElementById('fanCount').textContent = stats.fan_activations;
+
+            renderTempTrendChart(res.data);
+            renderHumidityChart(res.data);
+            renderTempDetail(res.data);
+        }
+    } catch (e) {
+        console.error('加载温度分析失败:', e);
+    }
+}
+
+function renderTempTrendChart(data) {
+    const ctx = document.getElementById('tempTrendChart').getContext('2d');
+    const labels = data.map(d => {
+        const time = d.time || d.recorded_at;
+        return time ? time.substring(5, 16) : '';
+    });
+    const temps = data.map(d => d.temperature || d.temp || 0);
+
+    if (tempTrendChart) tempTrendChart.destroy();
+
+    const fanPoints = data.map(d => (d.fan_activated || (d.temperature > 28)) ? d.temperature || d.temp : null);
+
+    tempTrendChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: '温度 (°C)',
+                data: temps,
+                borderColor: '#5A7A9B',
+                backgroundColor: 'rgba(90, 122, 155, 0.08)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.3,
+                pointRadius: 2,
+            }, {
+                label: '风扇激活点',
+                data: fanPoints,
+                borderColor: 'transparent',
+                backgroundColor: '#E07A7A',
+                pointRadius: 6,
+                pointStyle: 'rectRot',
+                showLine: false,
+            }, {
+                label: '阈值 (28°C)',
+                data: data.map(() => 28),
+                borderColor: '#E07A7A',
+                borderWidth: 1,
+                borderDash: [5, 5],
+                pointRadius: 0,
+                fill: false,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { labels: { font: { size: 11 } } } },
+            scales: {
+                y: { suggestedMin: 18, suggestedMax: 35, ticks: { callback: v => v + '°C' } },
+                x: { ticks: { font: { size: 10 } } }
+            }
+        }
+    });
+}
+
+function renderHumidityChart(data) {
+    const ctx = document.getElementById('humidityChart').getContext('2d');
+    const labels = data.map(d => {
+        const time = d.time || d.recorded_at;
+        return time ? time.substring(5, 16) : '';
+    });
+    const hums = data.map(d => d.humidity || 0);
+
+    if (humidityChart) humidityChart.destroy();
+
+    humidityChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: '湿度 (%)',
+                data: hums,
+                borderColor: '#6A9CB8',
+                backgroundColor: 'rgba(106, 156, 184, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.3,
+                pointRadius: 2,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { labels: { font: { size: 11 } } } },
+            scales: {
+                y: { suggestedMin: 20, suggestedMax: 80, ticks: { callback: v => v + '%' } },
+                x: { ticks: { font: { size: 10 } } }
+            }
+        }
+    });
+}
+
+function renderTempDetail(data) {
+    const tbody = document.getElementById('tempDetailBody');
+    tbody.innerHTML = data.slice().reverse().slice(0, 50).map(d => `
+        <tr>
+            <td style="font-size:12px;">${formatTime(d.time || d.recorded_at)}</td>
+            <td>${d.temperature || d.temp}°C</td>
+            <td>${d.humidity || '-'}%</td>
+            <td>${d.fan_activated ? '<span class="badge badge-danger">激活</span>' : '<span class="badge badge-secondary">否</span>'}</td>
+        </tr>
+    `).join('');
+}
+
+async function loadDeviceSummary() {
+    const hours = document.getElementById('timeRange').value;
+    try {
+        const res = await API.get(`/api/history/devices/summary?hours=${hours}`);
+        if (res.code === 0) {
+            renderDeviceStatusChart(res.data);
+            renderDeviceSummaryTable(res.data);
+        }
+    } catch (e) {
+        console.error('加载设备统计失败:', e);
+    }
+}
+
+function renderDeviceStatusChart(summary) {
+    const ctx = document.getElementById('deviceStatusChart').getContext('2d');
+    const deviceNames = { light: '灯光', fan: '风扇', door: '门锁', window: '窗户', ac: '空调' };
+    const devices = Object.keys(summary);
+
+    if (deviceStatusChart) deviceStatusChart.destroy();
+
+    deviceStatusChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: devices.map(d => deviceNames[d] || d),
+            datasets: [{
+                label: '开启/解锁/打开',
+                data: devices.map(d => summary[d].on_count),
+                backgroundColor: 'rgba(107, 170, 117, 0.6)',
+                borderColor: '#6BAA75',
+                borderWidth: 1,
+            }, {
+                label: '关闭/锁定/关闭',
+                data: devices.map(d => summary[d].off_count),
+                backgroundColor: 'rgba(224, 122, 122, 0.6)',
+                borderColor: '#E07A7A',
+                borderWidth: 1,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { labels: { font: { size: 11 } } } },
+            scales: { y: { beginAtZero: true } }
+        }
+    });
+}
+
+function renderDeviceSummaryTable(summary) {
+    const deviceNames = { light: '灯光', fan: '风扇', door: '门锁', window: '窗户', ac: '空调' };
+    const tbody = document.getElementById('deviceSummaryBody');
+    tbody.innerHTML = Object.keys(summary).map(d => {
+        const s = summary[d];
+        return `<tr>
+            <td>${deviceNames[d] || d}</td>
+            <td>${s.total_logs}</td>
+            <td>${s.on_count}</td>
+            <td><div style="display:flex;align-items:center;gap:6px;">
+                <div class="progress-bar" style="flex:1;height:6px;"><div class="progress-bar-fill" style="width:${s.on_ratio}%;background:var(--color-success);"></div></div>
+                <span style="font-size:12px;">${s.on_ratio}%</span>
+            </div></td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadAccessStats() {
+    const hours = document.getElementById('timeRange').value;
+    try {
+        const res = await API.get(`/api/access/logs?per_page=500`);
+        if (res.code === 0) {
+            const since = new Date(Date.now() - hours * 3600 * 1000);
+            const recentLogs = res.data.filter(l => new Date(l.access_time) > since);
+
+            const stats = { granted: 0, denied: 0, unknown: 0 };
+            recentLogs.forEach(l => { stats[l.access_result] = (stats[l.access_result] || 0) + 1; });
+
+            const ctx = document.getElementById('accessChart').getContext('2d');
+            if (accessChart) accessChart.destroy();
+
+            accessChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['允许进入', '拒绝', '未知'],
+                    datasets: [{
+                        data: [stats.granted, stats.denied, stats.unknown],
+                        backgroundColor: ['rgba(107,170,117,0.7)', 'rgba(224,122,122,0.7)', 'rgba(233,180,85,0.7)'],
+                        borderColor: ['#6BAA75', '#E07A7A', '#E9B455'],
+                        borderWidth: 1,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { position: 'right', labels: { font: { size: 11 } } } }
+                }
+            });
+        }
+    } catch (e) {
+        console.error('加载门禁统计失败:', e);
+    }
+}
+
+
+async function loadLightingAnalysis() {
+    const hours = document.getElementById('timeRange').value;
+    try {
+        // 加载统计数据
+        const statsRes = await API.get(`/api/lighting/stats?hours=${hours}`);
+        if (statsRes.code === 0) {
+            const d = statsRes.data;
+            document.getElementById('lightTotalHours').textContent = d.total_on_hours + 'h';
+            document.getElementById('lightAvgBrightness').textContent = d.avg_brightness + '%';
+            document.getElementById('lightEnergy').textContent = d.total_energy_wh + 'Wh';
+            document.getElementById('lightOpCount').textContent = d.total_operations;
+
+            renderLightBrightnessChart(d.brightness_chart);
+            renderLightSourceChart(d.sources);
+            renderLightDetail(d.brightness_chart);
+        }
+
+        // 加载每日汇总
+        const days = Math.ceil(hours / 24);
+        const dailyRes = await API.get(`/api/lighting/daily-summary?days=${Math.max(7, days)}`);
+        if (dailyRes.code === 0) {
+            renderLightDailyChart(dailyRes.data);
+        }
+    } catch (e) {
+        console.error('加载灯光分析失败:', e);
+    }
+}
+
+
+function renderLightBrightnessChart(chartData) {
+    const ctx = document.getElementById('lightBrightnessChart').getContext('2d');
+    const labels = chartData.map(d => d.time ? d.time.substring(5, 16) : '');
+    const brightness = chartData.map(d => d.brightness);
+    const onOff = chartData.map(d => d.status === 'on' ? d.brightness : 0);
+
+    if (lightBrightnessChart) lightBrightnessChart.destroy();
+
+    lightBrightnessChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: '亮度 (%)',
+                data: brightness,
+                borderColor: '#E9B455',
+                backgroundColor: 'rgba(233, 180, 85, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.2,
+                pointRadius: 3,
+                pointBackgroundColor: (ctx) => {
+                    const val = ctx.raw;
+                    return val > 0 ? '#E9B455' : '#ccc';
+                },
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { labels: { font: { size: 11 } } },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => {
+                            const item = chartData[ctx.dataIndex];
+                            return item
+                                ? `${item.status === 'on' ? '开灯' : '关灯'} ${item.brightness}% (${item.source})`
+                                : '';
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: { min: 0, max: 100, ticks: { callback: v => v + '%' } },
+                x: { ticks: { font: { size: 10 } } }
+            }
+        }
+    });
+}
+
+
+function renderLightSourceChart(sources) {
+    const ctx = document.getElementById('lightSourceChart').getContext('2d');
+    const sourceNames = {
+        manual: '手动控制',
+        remote: '远程控制',
+        auto: '自动控制',
+        auto_detection: '物体检测触发',
+        unknown: '未知',
+    };
+    const colors = {
+        manual: 'rgba(233,180,85,0.7)',
+        remote: 'rgba(106,156,184,0.7)',
+        auto: 'rgba(107,170,117,0.7)',
+        auto_detection: 'rgba(224,122,122,0.7)',
+        unknown: 'rgba(180,180,180,0.7)',
+    };
+    const borderColors = {
+        manual: '#E9B455',
+        remote: '#6A9CB8',
+        auto: '#6BAA75',
+        auto_detection: '#E07A7A',
+        unknown: '#999',
+    };
+
+    if (lightSourceChart) lightSourceChart.destroy();
+
+    const entries = Object.entries(sources);
+    lightSourceChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: entries.map(([k]) => sourceNames[k] || k),
+            datasets: [{
+                data: entries.map(([, v]) => v),
+                backgroundColor: entries.map(([k]) => colors[k] || 'rgba(180,180,180,0.7)'),
+                borderColor: entries.map(([k]) => borderColors[k] || '#999'),
+                borderWidth: 1,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'right', labels: { font: { size: 11 } } } }
+        }
+    });
+}
+
+
+function renderLightDailyChart(dailyData) {
+    const ctx = document.getElementById('lightDailyChart').getContext('2d');
+    const labels = dailyData.map(d => d.date.substring(5));
+    const hours = dailyData.map(d => d.total_on_hours);
+    const energy = dailyData.map(d => d.energy_wh);
+
+    if (lightDailyChart) lightDailyChart.destroy();
+
+    lightDailyChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: '开灯时长 (小时)',
+                data: hours,
+                backgroundColor: 'rgba(233, 180, 85, 0.5)',
+                borderColor: '#E9B455',
+                borderWidth: 1,
+                yAxisID: 'y',
+            }, {
+                label: '能耗 (Wh)',
+                data: energy,
+                type: 'line',
+                borderColor: '#E07A7A',
+                backgroundColor: 'rgba(224, 122, 122, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                yAxisID: 'y1',
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { labels: { font: { size: 11 } } } },
+            scales: {
+                y: {
+                    type: 'linear',
+                    position: 'left',
+                    title: { display: true, text: '小时', font: { size: 11 } },
+                    beginAtZero: true,
+                },
+                y1: {
+                    type: 'linear',
+                    position: 'right',
+                    title: { display: true, text: 'Wh', font: { size: 11 } },
+                    beginAtZero: true,
+                    grid: { drawOnChartArea: false },
+                },
+                x: { ticks: { font: { size: 10 } } }
+            }
+        }
+    });
+}
+
+
+function renderLightDetail(chartData) {
+    const tbody = document.getElementById('lightDetailBody');
+    const sourceNames = {
+        manual: '手动',
+        remote: '远程',
+        auto: '自动',
+        auto_detection: '检测触发',
+    };
+    tbody.innerHTML = chartData.slice().reverse().slice(0, 30).map(d => `
+        <tr>
+            <td style="font-size:12px;">${formatTime(d.time)}</td>
+            <td>${d.status === 'on' ? '<span class="badge badge-warning">开灯</span>' : '<span class="badge badge-secondary">关灯</span>'}</td>
+            <td>${d.brightness}%</td>
+            <td><span class="badge badge-info">${sourceNames[d.source] || d.source}</span></td>
+        </tr>
+    `).join('');
+}
+</script>
+{% endblock %}

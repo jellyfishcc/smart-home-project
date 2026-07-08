@@ -1,0 +1,376 @@
+{% extends 'base.html' %}
+{% block title %}设备控制{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">设备远程控制</div>
+        <div class="page-subtitle">远程控制灯光、风扇、空调、门锁、窗户等设备</div>
+    </div>
+    <button class="btn btn-outline btn-sm" onclick="loadDeviceStatus()">
+        <i class="bi bi-arrow-clockwise"></i> 刷新状态
+    </button>
+</div>
+
+<div class="grid-3">
+    <!-- 灯光控制 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-lightbulb-fill" style="color:var(--color-warning);"></i> 灯光控制</h5>
+            <label class="switch">
+                <input type="checkbox" id="lightSwitch" onchange="toggleDevice('light')">
+                <span class="slider"></span>
+            </label>
+        </div>
+        <div class="card-body">
+            <div style="text-align:center;margin-bottom:16px;">
+                <i class="bi bi-lightbulb" id="lightIcon" style="font-size:48px;color:var(--color-text-light);transition:all 0.3s;"></i>
+                <h3 id="lightBrightnessDisplay" style="margin-top:8px;">0%</h3>
+                <p style="font-size:12px;color:var(--color-text-light);">当前亮度</p>
+            </div>
+            <div>
+                <label style="font-size:12px;color:var(--color-text-light);display:flex;justify-content:space-between;">
+                    <span>亮度调节</span>
+                    <span id="lightBrightnessValue">0</span>
+                </label>
+                <input type="range" class="slider-range" id="lightSlider" min="0" max="100" value="0"
+                    oninput="onLightSlide()" onchange="setLightBrightness(this.value)" style="margin-top:8px;">
+            </div>
+            <div style="display:flex;gap:6px;margin-top:12px;">
+                <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setLightBrightness(0)">关</button>
+                <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setLightBrightness(30)">弱</button>
+                <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setLightBrightness(60)">中</button>
+                <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setLightBrightness(100)">强</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 风扇控制 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-fan" style="color:var(--color-info);"></i> 风扇控制</h5>
+            <label class="switch">
+                <input type="checkbox" id="fanSwitch" onchange="toggleDevice('fan')">
+                <span class="slider"></span>
+            </label>
+        </div>
+        <div class="card-body">
+            <div style="text-align:center;margin-bottom:16px;">
+                <i class="bi bi-fan" id="fanIcon" style="font-size:48px;color:var(--color-text-light);transition:all 0.3s;"></i>
+                <h3 id="fanSpeedDisplay">关闭</h3>
+                <p style="font-size:12px;color:var(--color-text-light);" id="fanAutoText">手动模式</p>
+            </div>
+            <div style="display:flex;gap:6px;">
+                <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setFanSpeed(0)">关</button>
+                <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setFanSpeed(1)">低</button>
+                <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setFanSpeed(2)">中</button>
+                <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setFanSpeed(3)">高</button>
+            </div>
+            <div style="margin-top:12px;padding:10px;background:rgba(106,156,184,0.1);border-radius:8px;">
+                <p style="font-size:12px;color:var(--color-info);"><i class="bi bi-info-circle"></i> 温度超过28°C时自动开启</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 空调控制 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-snow" style="color:var(--color-info);"></i> 空调控制</h5>
+            <label class="switch">
+                <input type="checkbox" id="acSwitch" onchange="toggleDevice('ac')">
+                <span class="slider"></span>
+            </label>
+        </div>
+        <div class="card-body">
+            <div style="text-align:center;margin-bottom:16px;">
+                <i class="bi bi-snow" id="acIcon" style="font-size:48px;color:var(--color-text-light);transition:all 0.3s;"></i>
+                <h3 id="acTempDisplay">关闭</h3>
+                <p style="font-size:12px;color:var(--color-text-light);">设定温度</p>
+            </div>
+            <div>
+                <label style="font-size:12px;color:var(--color-text-light);display:flex;justify-content:space-between;">
+                    <span>温度调节</span>
+                    <span id="acTempValue">26°C</span>
+                </label>
+                <input type="range" class="slider-range" id="acSlider" min="16" max="30" value="26"
+                    oninput="onACSlide()" onchange="setACTemp(this.value)" style="margin-top:8px;">
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="grid-2" style="margin-top:20px;">
+    <!-- 门锁控制 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-door-closed" style="color:var(--color-success);"></i> 门禁锁控制</h5>
+            <span class="badge badge-success" id="doorBadge">已锁定</span>
+        </div>
+        <div class="card-body">
+            <div style="text-align:center;padding:20px;">
+                <i class="bi bi-lock-fill" id="doorLockIcon" style="font-size:56px;color:var(--color-success);transition:all 0.3s;"></i>
+                <h3 id="doorLockStatus" style="margin-top:12px;">已锁定</h3>
+                <p style="font-size:12px;color:var(--color-text-light);">入口门状态</p>
+            </div>
+            <div style="display:flex;gap:10px;">
+                <button class="btn btn-success" style="flex:1;" onclick="controlDoor('unlocked')">
+                    <i class="bi bi-unlock"></i> 开锁
+                </button>
+                <button class="btn btn-danger" style="flex:1;" onclick="controlDoor('locked')">
+                    <i class="bi bi-lock"></i> 锁定
+                </button>
+            </div>
+            <div style="margin-top:12px;padding:10px;background:rgba(107,170,117,0.1);border-radius:8px;">
+                <p style="font-size:12px;color:var(--color-success);"><i class="bi bi-shield-check"></i> 人脸识别成功时自动开锁</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 窗户状态 -->
+    <div class="card">
+        <div class="card-header">
+            <h5><i class="bi bi-window" style="color:var(--color-info);"></i> 窗户状态</h5>
+            <span class="badge badge-info" id="windowBadge">已关闭</span>
+        </div>
+        <div class="card-body">
+            <div style="text-align:center;padding:20px;">
+                <i class="bi bi-window" id="windowIcon" style="font-size:56px;color:var(--color-info);transition:all 0.3s;"></i>
+                <h3 id="windowStatusText">已关闭</h3>
+                <p style="font-size:12px;color:var(--color-text-light);">窗户传感器状态</p>
+            </div>
+            <div style="display:flex;gap:10px;">
+                <button class="btn btn-outline" style="flex:1;" onclick="controlWindow('open')">
+                    <i class="bi bi-window-desktop"></i> 打开
+                </button>
+                <button class="btn btn-outline" style="flex:1;" onclick="controlWindow('closed')">
+                    <i class="bi bi-window"></i> 关闭
+                </button>
+            </div>
+            <div style="margin-top:12px;padding:10px;background:rgba(106,156,184,0.1);border-radius:8px;">
+                <p style="font-size:12px;color:var(--color-info);"><i class="bi bi-info-circle"></i> 实时监控门窗开关状态</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 设备操作历史 -->
+<div class="card" style="margin-top:20px;">
+    <div class="card-header">
+        <h5><i class="bi bi-clock-history"></i> 设备操作历史</h5>
+        <select class="form-control" id="deviceHistoryFilter" style="width:auto;font-size:12px;padding:5px 10px;" onchange="loadDeviceHistory()">
+            <option value="">全部设备</option>
+            <option value="light">灯光</option>
+            <option value="fan">风扇</option>
+            <option value="door">门锁</option>
+            <option value="window">窗户</option>
+            <option value="ac">空调</option>
+        </select>
+    </div>
+    <div class="card-body" style="padding:0;">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>设备</th>
+                        <th>状态</th>
+                        <th>数值</th>
+                        <th>操作来源</th>
+                    </tr>
+                </thead>
+                <tbody id="deviceHistoryBody">
+                    <tr><td colspan="5" style="text-align:center;color:var(--color-text-light);padding:30px;">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    loadDeviceStatus();
+    loadDeviceHistory();
+    socket.on('device_update', (data) => {
+        updateDeviceUI(data.device, data.state);
+    });
+});
+
+async function loadDeviceStatus() {
+    try {
+        const res = await API.get('/api/devices');
+        if (res.code === 0) {
+            const d = res.data;
+            updateDeviceUI('light', d.light);
+            updateDeviceUI('fan', d.fan);
+            updateDeviceUI('door', d.door);
+            updateDeviceUI('window', d.window);
+            updateDeviceUI('ac', d.ac);
+        }
+    } catch (e) {
+        console.error('加载设备状态失败:', e);
+    }
+}
+
+function updateDeviceUI(device, state) {
+    if (device === 'light') {
+        document.getElementById('lightSwitch').checked = state.on;
+        document.getElementById('lightSlider').value = state.brightness;
+        document.getElementById('lightBrightnessDisplay').textContent = state.brightness + '%';
+        document.getElementById('lightBrightnessValue').textContent = state.brightness;
+        const icon = document.getElementById('lightIcon');
+        if (state.on) {
+            icon.className = 'bi bi-lightbulb-fill';
+            icon.style.color = 'var(--color-warning)';
+            icon.style.textShadow = `0 0 ${20 + state.brightness * 0.3}px rgba(233,180,85,0.6)`;
+        } else {
+            icon.className = 'bi bi-lightbulb';
+            icon.style.color = 'var(--color-text-light)';
+            icon.style.textShadow = 'none';
+        }
+    } else if (device === 'fan') {
+        document.getElementById('fanSwitch').checked = state.on;
+        document.getElementById('fanSpeedDisplay').textContent = state.on ? `档位 ${state.speed}` : '关闭';
+        const icon = document.getElementById('fanIcon');
+        if (state.on) {
+            icon.style.color = 'var(--color-info)';
+            icon.style.animation = `spin ${2 - state.speed * 0.4}s linear infinite`;
+        } else {
+            icon.style.color = 'var(--color-text-light)';
+            icon.style.animation = 'none';
+        }
+    } else if (device === 'door') {
+        document.getElementById('doorBadge').textContent = state.locked ? '已锁定' : '已开锁';
+        document.getElementById('doorBadge').className = state.locked ? 'badge badge-success' : 'badge badge-warning';
+        document.getElementById('doorLockStatus').textContent = state.locked ? '已锁定' : '已开锁';
+        const icon = document.getElementById('doorLockIcon');
+        if (state.locked) {
+            icon.className = 'bi bi-lock-fill';
+            icon.style.color = 'var(--color-success)';
+        } else {
+            icon.className = 'bi bi-unlock-fill';
+            icon.style.color = 'var(--color-warning)';
+        }
+    } else if (device === 'window') {
+        document.getElementById('windowBadge').textContent = state.closed ? '已关闭' : '已打开';
+        document.getElementById('windowBadge').className = state.closed ? 'badge badge-info' : 'badge badge-warning';
+        document.getElementById('windowStatusText').textContent = state.closed ? '已关闭' : '已打开';
+        const icon = document.getElementById('windowIcon');
+        icon.className = state.closed ? 'bi bi-window' : 'bi bi-window-dash';
+    } else if (device === 'ac') {
+        document.getElementById('acSwitch').checked = state.on;
+        document.getElementById('acTempDisplay').textContent = state.on ? state.temp + '°C' : '关闭';
+        document.getElementById('acSlider').value = state.temp;
+        document.getElementById('acTempValue').textContent = state.temp + '°C';
+        const icon = document.getElementById('acIcon');
+        icon.style.color = state.on ? 'var(--color-info)' : 'var(--color-text-light)';
+    }
+}
+
+async function toggleDevice(device) {
+    try {
+        await API.post(`/api/devices/${device}/toggle`, { source: 'remote' });
+        showToast(`${device} 已切换`, 'success');
+    } catch (e) {
+        showToast('操作失败', 'error');
+        loadDeviceStatus();
+    }
+}
+
+function onLightSlide() {
+    const val = document.getElementById('lightSlider').value;
+    document.getElementById('lightBrightnessValue').textContent = val;
+}
+
+async function setLightBrightness(brightness) {
+    try {
+        const res = await API.post('/api/devices/light/brightness', { brightness: parseInt(brightness), source: 'remote' });
+        if (res.code === 0) {
+            updateDeviceUI('light', res.data.state);
+            showToast(`灯光亮度设为 ${brightness}%`, 'success');
+        }
+    } catch (e) {
+        showToast('设置失败', 'error');
+    }
+}
+
+function onACSlide() {
+    const val = document.getElementById('acSlider').value;
+    document.getElementById('acTempValue').textContent = val + '°C';
+}
+
+async function setACTemp(temp) {
+    try {
+        const res = await API.post('/api/devices/ac/control', { status: 'on', value: parseInt(temp), source: 'remote' });
+        if (res.code === 0) {
+            showToast(`空调温度设为 ${temp}°C`, 'success');
+        }
+    } catch (e) {
+        showToast('设置失败', 'error');
+    }
+}
+
+async function setFanSpeed(speed) {
+    try {
+        if (parseInt(speed) === 0) {
+            await API.post('/api/devices/fan/control', { status: 'off', source: 'remote' });
+        } else {
+            await API.post('/api/devices/fan/control', { status: 'on', value: parseInt(speed), source: 'remote' });
+        }
+        showToast(`风扇档位设为 ${speed}`, 'success');
+        loadDeviceStatus();
+    } catch (e) {
+        showToast('设置失败', 'error');
+    }
+}
+
+async function controlDoor(status) {
+    try {
+        await API.post('/api/devices/door/control', { status: status, source: 'remote' });
+        showToast(status === 'unlocked' ? '门已开锁' : '门已锁定', status === 'unlocked' ? 'warning' : 'success');
+        loadDeviceStatus();
+    } catch (e) {
+        showToast('操作失败', 'error');
+    }
+}
+
+async function controlWindow(status) {
+    try {
+        await API.post('/api/devices/window/control', { status: status, source: 'remote' });
+        showToast(status === 'open' ? '窗户已打开' : '窗户已关闭', 'info');
+        loadDeviceStatus();
+    } catch (e) {
+        showToast('操作失败', 'error');
+    }
+}
+
+async function loadDeviceHistory() {
+    const device = document.getElementById('deviceHistoryFilter').value;
+    const url = `/api/history/devices?hours=24${device ? '&device=' + device : ''}`;
+    try {
+        const res = await API.get(url);
+        if (res.code === 0) {
+            const tbody = document.getElementById('deviceHistoryBody');
+            if (res.data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-text-light);padding:30px;">暂无记录</td></tr>';
+            } else {
+                const deviceNames = { light: '灯光', fan: '风扇', door: '门锁', window: '窗户', ac: '空调' };
+                const sourceNames = { manual: '手动', remote: '远程', auto: '自动', sensor: '传感器', face_recognition: '人脸识别' };
+                tbody.innerHTML = res.data.slice(0, 30).map(l => `
+                    <tr>
+                        <td style="font-size:12px;">${formatTime(l.recorded_at)}</td>
+                        <td>${deviceNames[l.device_name] || l.device_name}</td>
+                        <td>${l.status}</td>
+                        <td style="font-size:12px;">${l.value || '-'}</td>
+                        <td><span class="badge badge-secondary">${sourceNames[l.source] || l.source}</span></td>
+                    </tr>
+                `).join('');
+            }
+        }
+    } catch (e) {
+        console.error('加载设备历史失败:', e);
+    }
+}
+</script>
+{% endblock %}

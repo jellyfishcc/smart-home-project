@@ -1,0 +1,22 @@
+# Virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Windows system files
+Thumbs.db
+.DS_Store
+*.part
+*.partial
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.agents/
+MobaXterm*
+venv/
