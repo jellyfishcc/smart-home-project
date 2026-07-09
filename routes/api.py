@@ -18,6 +18,7 @@ from werkzeug.utils import secure_filename
 from models import db, AuthorizedPerson, AccessLog, TemperatureLog, DeviceStatusLog, DetectionRecord, LightingRecord
 from services.device_manager import device_manager
 from services.sensor_simulator import sensor_simulator
+from services.camera_capture import capture_camera_frame
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -157,6 +158,72 @@ def register_face(person_id):
 # 2. 人脸识别门禁 API
 # ============================================================
 
+def _process_access_image(file_path, filename):
+    face_service = current_app.config.get('FACE_SERVICE')
+    if not face_service:
+        return jsonify({'code': 1, 'message': '人脸识别服务不可用'}), 500
+
+    liveness = face_service.check_liveness(file_path)
+    result = face_service.recognize(file_path)
+
+    person = None
+    if result['person_id']:
+        person = AuthorizedPerson.query.get(result['person_id'])
+        if person:
+            result['person_name'] = person.name
+
+    access_result = 'unknown'
+    detail = result['detail']
+
+    if result['recognized'] and person:
+        if person.is_authorized and not person.is_fake:
+            access_result = 'granted'
+            detail = f'授权人员 {person.name} 识别成功，门禁已开启'
+            device_manager.set_device('door', 'unlocked', source='face_recognition')
+        elif person.is_fake:
+            access_result = 'denied'
+            detail = f'伪造身份检测 {person.name}，门禁拒绝'
+        else:
+            access_result = 'denied'
+            detail = f'人员 {person.name} 未授权，门禁拒绝'
+    elif result['faces_detected'] > 0:
+        access_result = 'denied'
+        detail = '未授权人员，门禁拒绝'
+
+    if not liveness['is_live']:
+        access_result = 'denied'
+        detail += f' | 活体检测失败({liveness["detail"]})'
+
+    log = AccessLog(
+        person_id=person.id if person else None,
+        person_name=person.name if person else '未知',
+        access_time=datetime.utcnow(),
+        access_result=access_result,
+        confidence=result.get('confidence'),
+        image_path=file_path,
+        method='face_recognition',
+        detail=detail,
+    )
+    db.session.add(log)
+    db.session.commit()
+
+    return jsonify({
+        'code': 0,
+        'message': '识别完成',
+        'data': {
+            'access_result': access_result,
+            'person_name': result.get('person_name'),
+            'person_id': result.get('person_id'),
+            'confidence': result.get('confidence'),
+            'faces_detected': result.get('faces_detected'),
+            'liveness': liveness,
+            'detail': detail,
+            'image_url': f'/api/files/detections/{filename}',
+            'log_id': log.id,
+        }
+    })
+
+
 @api_bp.route('/access/recognize', methods=['POST'])
 def recognize_face():
     """人脸识别开门 - 上传照片进行识别"""
@@ -248,6 +315,25 @@ def recognize_face():
             'log_id': log.id,
         }
     })
+
+
+@api_bp.route('/access/camera', methods=['POST'])
+def recognize_face_from_camera():
+    """从运行 Flask 的设备摄像头拍照，并复用门禁识别开门逻辑"""
+    timestamp = int(time.time())
+    filename = f'access_camera_{timestamp}.jpg'
+    upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'detections')
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = os.path.join(upload_dir, filename)
+
+    capture = capture_camera_frame(current_app.config.get('CAMERA_INDEX', 0), file_path)
+    if not capture.get('success'):
+        return jsonify({
+            'code': 1,
+            'message': capture.get('error', '摄像头拍照失败'),
+        }), 500
+
+    return _process_access_image(file_path, filename)
 
 
 @api_bp.route('/access/logs', methods=['GET'])
@@ -359,7 +445,22 @@ def detect_from_camera():
     if not detection_service:
         return jsonify({'code': 1, 'message': '检测服务不可用'}), 500
 
-    result = detection_service.detect_from_camera()
+    timestamp = int(time.time())
+    filename = f'camera_{timestamp}.jpg'
+    detection_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'detections')
+    os.makedirs(detection_dir, exist_ok=True)
+    image_path = os.path.join(detection_dir, filename)
+
+    capture = capture_camera_frame(current_app.config.get('CAMERA_INDEX', 0), image_path)
+    if not capture.get('success'):
+        return jsonify({
+            'code': 1,
+            'message': capture.get('error', '摄像头拍照失败'),
+        }), 500
+
+    result_filename = f'camera_{timestamp}_result.jpg'
+    result_path = os.path.join(detection_dir, result_filename)
+    result = detection_service.detect(image_path, result_path)
 
     if 'error' in result:
         return jsonify({'code': 1, 'message': result['error']}), 500
@@ -370,12 +471,13 @@ def detect_from_camera():
         for action in actions:
             if action['action'] == 'turn_on_light':
                 device_manager.set_light_brightness(80, source='auto_detection')
+                action['executed'] = True
 
     triggered_action = json.dumps(actions, ensure_ascii=False) if actions else None
 
     record = DetectionRecord(
-        image_path=result['image_path'],
-        result_image_path=result.get('result_image_path'),
+        image_path=f'/api/files/detections/{filename}',
+        result_image_path=f'/api/files/detections/{result_filename}',
         objects_detected=json.dumps(result['objects'], ensure_ascii=False),
         object_count=result['count'],
         detected_at=datetime.utcnow(),
@@ -389,6 +491,9 @@ def detect_from_camera():
         'code': 0,
         'message': '摄像头检测完成',
         'data': {
+            'record_id': record.id,
+            'image_url': f'/api/files/detections/{filename}',
+            'result_image_url': f'/api/files/detections/{result_filename}',
             'objects': result['objects'],
             'count': result['count'],
             'triggered_actions': json.loads(triggered_action) if triggered_action else None,

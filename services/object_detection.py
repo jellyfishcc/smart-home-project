@@ -11,6 +11,7 @@ import cv2
 import json
 import numpy as np
 from datetime import datetime
+from pathlib import Path
 
 # COCO 数据集的 80 个类别（YOLOv8 默认）
 COCO_CLASSES = [
@@ -44,8 +45,9 @@ TRIGGER_RULES = {
 class ObjectDetectionService:
     """YOLO 物体检测服务"""
 
-    def __init__(self, model_name='yolov8n.pt', conf_threshold=0.4):
+    def __init__(self, model_name='yolov8n.pt', conf_threshold=0.4, fallback_model=None):
         self.model_name = model_name
+        self.fallback_model = fallback_model
         self.conf_threshold = conf_threshold
         self._model = None
         self._available = False
@@ -53,14 +55,35 @@ class ObjectDetectionService:
 
     def _init_model(self):
         """初始化 YOLO 模型"""
+        candidates = [self.model_name]
+        if self.fallback_model and Path(self.fallback_model) != Path(self.model_name):
+            candidates.append(self.fallback_model)
+
         try:
             from ultralytics import YOLO
-            self._model = YOLO(self.model_name)
-            self._available = True
-            print('[YOLO] 模型加载成功:', self.model_name)
         except Exception as e:
-            print(f'[YOLO] 模型加载失败，将使用降级模式: {e}')
+            print(f'[YOLO] ultralytics 加载失败，将使用降级模式: {e}')
             self._available = False
+            return
+
+        last_error = None
+        for candidate in candidates:
+            try:
+                candidate_path = Path(candidate)
+                if not candidate_path.exists():
+                    print(f'[YOLO] 模型文件不存在: {candidate_path}')
+                    continue
+                self._model = YOLO(str(candidate_path))
+                self.model_name = candidate_path
+                self._available = True
+                print('[YOLO] 模型加载成功:', candidate_path)
+                return
+            except Exception as e:
+                last_error = e
+                print(f'[YOLO] 模型加载失败 {candidate}: {e}')
+
+        print(f'[YOLO] 所有模型加载失败，将使用降级模式: {last_error}')
+        self._available = False
 
     @property
     def available(self):
@@ -207,7 +230,9 @@ class ObjectDetectionService:
             return {'error': '摄像头读取失败'}
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        temp_path = os.path.join('uploads', 'detections', f'camera_{timestamp}.jpg')
-        cv2.imwrite(temp_path, frame)
+        detection_dir = Path(__file__).resolve().parents[1] / 'uploads' / 'detections'
+        detection_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = detection_dir / f'camera_{timestamp}.jpg'
+        cv2.imwrite(str(temp_path), frame)
 
-        return self.detect(temp_path)
+        return self.detect(str(temp_path))

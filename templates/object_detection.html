@@ -28,6 +28,10 @@
                 <input type="file" id="detectFileInput" accept="image/*" style="display:none;">
             </div>
 
+            <button class="btn btn-primary" id="detectCameraBtn" onclick="handleDetectCamera()" style="width:100%;margin-top:12px;">
+                <i class="bi bi-camera-video"></i> 摄像头拍照检测
+            </button>
+
             <div id="detectLoading" style="display:none;text-align:center;padding:30px;">
                 <div class="spinner" style="border-color:rgba(90,122,155,0.3);border-top-color:#5A7A9B;"></div>
                 <p style="margin-top:12px;color:var(--color-text-light);font-size:13px;">正在检测中...</p>
@@ -156,6 +160,7 @@ function setupDetectUpload() {
 
 async function handleDetectFile(file) {
     document.getElementById('detectUploadZone').style.display = 'none';
+    document.getElementById('detectCameraBtn').disabled = true;
     document.getElementById('detectLoading').style.display = 'block';
     document.getElementById('detectResultArea').style.display = 'none';
 
@@ -209,8 +214,64 @@ async function handleDetectFile(file) {
     }
 }
 
+async function handleDetectCamera() {
+    document.getElementById('detectUploadZone').style.display = 'none';
+    document.getElementById('detectCameraBtn').disabled = true;
+    document.getElementById('detectLoading').style.display = 'block';
+    document.getElementById('detectResultArea').style.display = 'none';
+
+    try {
+        const res = await API.post('/api/detection/camera', {});
+        document.getElementById('detectLoading').style.display = 'none';
+        document.getElementById('detectResultArea').style.display = 'block';
+
+        if (res.code === 0) {
+            const d = res.data;
+            document.getElementById('originalImg').src = `${d.image_url}?t=${Date.now()}`;
+            document.getElementById('resultImg').src = `${d.result_image_url}?t=${Date.now()}`;
+
+            let html = `<div class="alert alert-success">
+                <i class="bi bi-check-circle-fill"></i>
+                <strong>摄像头检测完成</strong> - 共识别到 ${d.count} 个物体
+            </div>`;
+
+            if (d.objects && d.objects.length > 0) {
+                html += '<div style="margin-top:12px;"><p style="font-size:13px;font-weight:600;margin-bottom:8px;">检测详情</p>';
+                d.objects.forEach((obj) => {
+                    const color = obj.class === 'person' ? 'badge-info' : 'badge-secondary';
+                    html += `<div style="display:flex;justify-content:space-between;padding:6px 12px;background:rgba(90,122,155,0.03);border-radius:6px;margin-bottom:4px;">
+                        <span><span class="badge ${color}">${obj.class}</span> <span style="font-size:12px;color:var(--color-text-light);">置信度 ${(obj.confidence * 100).toFixed(1)}%</span></span>
+                    </div>`;
+                });
+                html += '</div>';
+            }
+
+            if (d.triggered_actions) {
+                html += '<div class="alert alert-warning" style="margin-top:12px;"><i class="bi bi-exclamation-triangle-fill"></i><div>';
+                d.triggered_actions.forEach(a => {
+                    html += `<div><strong>${escapeHtml(a.description)}</strong>${a.executed ? ' <span class="badge badge-success">已执行</span>' : ''}</div>`;
+                });
+                html += '</div></div>';
+            }
+
+            document.getElementById('detectDetail').innerHTML = html;
+            showToast(`摄像头检测完成，识别到 ${d.count} 个物体`, 'success');
+            loadDetectionRecords(1);
+        } else {
+            showToast(res.message || '摄像头检测失败', 'error');
+            resetDetectUpload();
+        }
+    } catch (e) {
+        showToast('摄像头请求失败', 'error');
+        resetDetectUpload();
+    } finally {
+        document.getElementById('detectCameraBtn').disabled = false;
+    }
+}
+
 function resetDetectUpload() {
     document.getElementById('detectUploadZone').style.display = 'block';
+    document.getElementById('detectCameraBtn').disabled = false;
     document.getElementById('detectLoading').style.display = 'none';
     document.getElementById('detectResultArea').style.display = 'none';
     document.getElementById('detectFileInput').value = '';

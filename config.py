@@ -20,12 +20,17 @@ DATA_DIR = BASE_DIR / 'data'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp'}
 
 # YOLO 模型配置
-YOLO_MODEL = 'yolov8n.pt'  # nano 模型，速度快
-YOLO_CONF_THRESHOLD = 0.4   # 置信度阈值
+YOLO_CUSTOM_MODEL = BASE_DIR / 'models' / 'yolo' / 'best.pt'
+YOLO_FALLBACK_MODEL = BASE_DIR / 'yolov8n.pt'
+YOLO_MODEL = YOLO_CUSTOM_MODEL if YOLO_CUSTOM_MODEL.exists() else YOLO_FALLBACK_MODEL
+YOLO_CONF_THRESHOLD = 0.4
+
+# 服务器端摄像头配置。Flask 在香橙派上运行时，0 默认对应 /dev/video0。
+CAMERA_INDEX = 0
 
 # 人脸识别配置
-FACE_CONFIDENCE_THRESHOLD = 70  # LBPH 置信度阈值（越低越匹配）
-FACE_CASCADE_PATH = None  # 自动查找 OpenCV 自带的级联分类器
+FACE_CONFIDENCE_THRESHOLD = 70
+FACE_CASCADE_PATH = None
 FACE_MATCH_THRESHOLD = 0.45
 FACE_EMBEDDINGS_PATH = DATA_DIR / 'face_embeddings.pkl'
 INSIGHTFACE_MODEL_NAME = 'buffalo_l'
@@ -33,7 +38,7 @@ INSIGHTFACE_MODEL_ROOT = BASE_DIR / 'models'
 INSIGHTFACE_DET_SIZE = (320, 320)
 
 # 温度阈值（摄氏度）
-TEMPERATURE_THRESHOLD = 28.0  # 超过此温度自动开启风扇
+TEMPERATURE_THRESHOLD = 28.0
 
 # SocketIO 配置
 SOCKETIO_ASYNC_MODE = 'eventlet'
@@ -46,9 +51,9 @@ SIMULATION_MODE = True
 
 # 设备初始状态
 DEFAULT_DEVICE_STATES = {
-    'light': {'on': False, 'brightness': 0},    # 灯光
-    'fan': {'on': False, 'speed': 0},            # 风扇/空调
-    'door': {'locked': True},                     # 入口门
-    'window': {'closed': True},                   # 窗户
-    'ac': {'on': False, 'temp': 26},             # 空调
+    'light': {'on': False, 'brightness': 0},
+    'fan': {'on': False, 'speed': 0},
+    'door': {'locked': True},
+    'window': {'closed': True},
+    'ac': {'on': False, 'temp': 26},
 }

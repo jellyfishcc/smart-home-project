@@ -64,6 +64,7 @@ logger.info('正在初始化物体检测服务 (YOLO)...')
 detection_service = ObjectDetectionService(
     model_name=config.YOLO_MODEL,
     conf_threshold=config.YOLO_CONF_THRESHOLD,
+    fallback_model=config.YOLO_FALLBACK_MODEL,
 )
 app.config['DETECTION_SERVICE'] = detection_service
 
@@ -190,4 +191,4 @@ if __name__ == '__main__':
     logger.info('  访问地址: http://localhost:5000')
     logger.info('=' * 50)
 
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)

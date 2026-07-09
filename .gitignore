@@ -10,7 +10,10 @@ Thumbs.db
 .DS_Store
 *.part
 *.partial
-models/
+/best.pt
+models/*
+!models/yolo/
+!models/yolo/best.pt
 
 # IDE
 .vscode/

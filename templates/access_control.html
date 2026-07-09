@@ -24,6 +24,10 @@
                 <input type="file" id="faceFileInput" accept="image/*" style="display:none;">
             </div>
 
+            <button class="btn btn-primary" id="faceCameraBtn" onclick="handleFaceCamera()" style="width:100%;margin-top:12px;">
+                <i class="bi bi-camera-video"></i> 摄像头识别开门
+            </button>
+
             <div id="faceResultArea" style="display:none;margin-top:16px;">
                 <div class="image-preview" style="margin-bottom:12px;">
                     <img id="facePreviewImg" src="" alt="预览">
@@ -147,6 +151,7 @@ function formatSimilarity(value) {
 
 async function handleFaceFile(file) {
     document.getElementById('faceUploadZone').style.display = 'none';
+    document.getElementById('faceCameraBtn').disabled = true;
     document.getElementById('faceLoading').style.display = 'block';
     document.getElementById('faceResultArea').style.display = 'none';
 
@@ -203,8 +208,67 @@ async function handleFaceFile(file) {
     }
 }
 
+async function handleFaceCamera() {
+    document.getElementById('faceUploadZone').style.display = 'none';
+    document.getElementById('faceCameraBtn').disabled = true;
+    document.getElementById('faceLoading').style.display = 'block';
+    document.getElementById('faceResultArea').style.display = 'none';
+
+    try {
+        const res = await API.post('/api/access/camera', {});
+        document.getElementById('faceLoading').style.display = 'none';
+        document.getElementById('faceResultArea').style.display = 'block';
+
+        if (res.code === 0) {
+            const d = res.data;
+            document.getElementById('facePreviewImg').src = `${d.image_url}?t=${Date.now()}`;
+
+            let resultHtml = '';
+            if (d.access_result === 'granted') {
+                resultHtml = `
+                    <div class="alert alert-success">
+                        <i class="bi bi-check-circle-fill" style="font-size:18px;"></i>
+                        <div>
+                            <strong>门禁已开启</strong> - 欢迎回来，${escapeHtml(d.person_name || '授权人员')}
+                            <div style="font-size:12px;margin-top:4px;">相似度 ${formatSimilarity(d.confidence)} | 活体检测 ${d.liveness.is_live ? '通过' : '未通过'} (${d.liveness.score}分)</div>
+                        </div>
+                    </div>`;
+            } else if (d.access_result === 'denied') {
+                resultHtml = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-x-circle-fill" style="font-size:18px;"></i>
+                        <div>
+                            <strong>门禁拒绝</strong> - ${escapeHtml(d.detail)}
+                            <div style="font-size:12px;margin-top:4px;">检测到 ${d.faces_detected} 张人脸 | 相似度 ${formatSimilarity(d.confidence)}</div>
+                        </div>
+                    </div>`;
+            } else {
+                resultHtml = `
+                    <div class="alert alert-warning">
+                        <i class="bi bi-question-circle-fill" style="font-size:18px;"></i>
+                        <div>
+                            <strong>未识别</strong> - ${escapeHtml(d.detail)}
+                        </div>
+                    </div>`;
+            }
+            document.getElementById('faceResultBox').innerHTML = resultHtml;
+            showToast('摄像头识别完成', d.access_result === 'granted' ? 'success' : 'warning');
+            loadAccessLogs(currentPage);
+        } else {
+            showToast(res.message || '摄像头识别失败', 'error');
+            resetFaceUpload();
+        }
+    } catch (e) {
+        showToast('摄像头请求失败', 'error');
+        resetFaceUpload();
+    } finally {
+        document.getElementById('faceCameraBtn').disabled = false;
+    }
+}
+
 function resetFaceUpload() {
     document.getElementById('faceUploadZone').style.display = 'block';
+    document.getElementById('faceCameraBtn').disabled = false;
     document.getElementById('faceLoading').style.display = 'none';
     document.getElementById('faceResultArea').style.display = 'none';
     document.getElementById('faceFileInput').value = '';
