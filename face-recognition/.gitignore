@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local test fixtures
+.test_tmp/
+.unit_fixture/
+
+# Generated face vector cache
+authorized_faces_cache.npz
