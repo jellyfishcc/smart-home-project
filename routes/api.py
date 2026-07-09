@@ -326,7 +326,7 @@ def recognize_face_from_camera():
     os.makedirs(upload_dir, exist_ok=True)
     file_path = os.path.join(upload_dir, filename)
 
-    capture = capture_camera_frame(current_app.config.get('CAMERA_INDEX', 0), file_path)
+    capture = capture_camera_frame(current_app.config.get('CAMERA_SOURCE', 0), file_path)
     if not capture.get('success'):
         return jsonify({
             'code': 1,
@@ -451,7 +451,7 @@ def detect_from_camera():
     os.makedirs(detection_dir, exist_ok=True)
     image_path = os.path.join(detection_dir, filename)
 
-    capture = capture_camera_frame(current_app.config.get('CAMERA_INDEX', 0), image_path)
+    capture = capture_camera_frame(current_app.config.get('CAMERA_SOURCE', 0), image_path)
     if not capture.get('success'):
         return jsonify({
             'code': 1,

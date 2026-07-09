@@ -1,6 +1,7 @@
 """
 智能家居系统 - 配置文件
 """
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -25,8 +26,14 @@ YOLO_FALLBACK_MODEL = BASE_DIR / 'yolov8n.pt'
 YOLO_MODEL = YOLO_CUSTOM_MODEL if YOLO_CUSTOM_MODEL.exists() else YOLO_FALLBACK_MODEL
 YOLO_CONF_THRESHOLD = 0.4
 
-# 服务器端摄像头配置。Flask 在香橙派上运行时，0 默认对应 /dev/video0。
-CAMERA_INDEX = 0
+# 服务器端摄像头配置。
+# 默认明确使用香橙派/Linux 的 /dev/video0，避免在 Windows 本地误读电脑摄像头。
+# 如需切换设备：
+#   Linux: SMART_HOME_CAMERA_DEVICE=/dev/video1 python3 app.py
+#   Fallback numeric index: SMART_HOME_CAMERA_DEVICE= SMART_HOME_CAMERA_INDEX=1 python3 app.py
+CAMERA_DEVICE = os.environ.get('SMART_HOME_CAMERA_DEVICE', '/dev/video0')
+CAMERA_INDEX = int(os.environ.get('SMART_HOME_CAMERA_INDEX', '0'))
+CAMERA_SOURCE = CAMERA_DEVICE or CAMERA_INDEX
 
 # 人脸识别配置
 FACE_CONFIDENCE_THRESHOLD = 70

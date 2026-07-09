@@ -187,6 +187,7 @@ if __name__ == '__main__':
     logger.info('  智能家居管理系统启动中...')
     logger.info(f'  YOLO 检测: {"可用" if detection_service.available else "降级模式"}')
     logger.info(f'  人脸 Embedding: 已加载 {len(face_service.records)} 条' if face_service.is_trained else '  人脸 Embedding: 未注册')
+    logger.info(f'  摄像头来源: {config.CAMERA_SOURCE}')
     logger.info(f'  传感器模式: {"模拟" if config.SIMULATION_MODE else "真实"}')
     logger.info('  访问地址: http://localhost:5000')
     logger.info('=' * 50)
