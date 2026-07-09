@@ -10,10 +10,10 @@ class DownloadFaceModelsTest(unittest.TestCase):
 
         model_root = default_model_root(repo_root)
 
-        self.assertEqual(model_root, repo_root / "face-recognition" / "models")
+        self.assertEqual(model_root, repo_root / "models")
         self.assertEqual(
             expected_model_dir(model_root, "buffalo_l"),
-            repo_root / "face-recognition" / "models" / "models" / "buffalo_l",
+            repo_root / "models" / "models" / "buffalo_l",
         )
 
     def test_missing_files_reports_only_absent_files(self):

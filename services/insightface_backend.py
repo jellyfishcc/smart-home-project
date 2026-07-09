@@ -22,6 +22,8 @@ class InsightFaceBackend:
     ):
         from insightface.app import FaceAnalysis
 
+        model_root = Path(model_root).resolve()
+        model_root.mkdir(parents=True, exist_ok=True)
         self._app = FaceAnalysis(
             name=model_name,
             root=str(model_root),

@@ -1,13 +1,17 @@
 import cv2
 import onnxruntime as ort
 from insightface.app import FaceAnalysis
+from pathlib import Path
 from config import test_photo
 
 print("ONNX Runtime Providers:", ort.get_available_providers())
 
+MODEL_ROOT = Path(__file__).resolve().parent / "models"
+MODEL_ROOT.mkdir(parents=True, exist_ok=True)
+
 app = FaceAnalysis(
     name="buffalo_l",
-    root=r"D:\myproject\face-recognition\models",
+    root=str(MODEL_ROOT),
     providers=["CPUExecutionProvider"]
 )
 

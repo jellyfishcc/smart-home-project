@@ -22,7 +22,7 @@ def repo_root() -> Path:
 
 def default_model_root(root: Path | str | None = None) -> Path:
     base = Path(root) if root is not None else repo_root()
-    return base / "face-recognition" / "models"
+    return base / "models"
 
 
 def expected_model_dir(model_root: Path | str, model_name: str) -> Path:
@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
         "--model-root",
         type=Path,
         default=Path(env_model_root) if env_model_root else default_model_root(),
-        help="Model root directory. Default: face-recognition/models",
+        help="Model root directory. Default: models",
     )
     parser.add_argument(
         "--check-only",

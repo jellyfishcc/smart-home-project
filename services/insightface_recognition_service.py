@@ -4,7 +4,6 @@ Smart home face recognition service backed by InsightFace embeddings.
 from __future__ import annotations
 
 import logging
-import os
 import pickle
 import shutil
 from datetime import datetime
@@ -16,6 +15,8 @@ import numpy as np
 from services.insightface_backend import InsightFaceBackend
 
 logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FaceRecognitionService:
@@ -29,21 +30,22 @@ class FaceRecognitionService:
         backend=None,
         embeddings_path=None,
         model_name='buffalo_l',
-        model_root=r'D:\myproject\face-recognition\models',
+        model_root=None,
         det_size=(320, 320),
     ):
-        self.known_faces_dir = known_faces_dir
-        self.data_dir = data_dir
+        self.known_faces_dir = Path(known_faces_dir)
+        self.data_dir = Path(data_dir)
         self.confidence_threshold = float(confidence_threshold)
-        self.embeddings_path = embeddings_path or os.path.join(self.data_dir, 'face_embeddings.pkl')
+        self.embeddings_path = Path(embeddings_path) if embeddings_path else self.data_dir / 'face_embeddings.pkl'
+        model_root = Path(model_root) if model_root is not None else PROJECT_ROOT / 'models'
         self.backend = backend or InsightFaceBackend(
             model_name=model_name,
             model_root=model_root,
             det_size=det_size,
         )
 
-        os.makedirs(self.known_faces_dir, exist_ok=True)
-        os.makedirs(self.data_dir, exist_ok=True)
+        self.known_faces_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
 
         self.records = self._load_embeddings()
         self.is_trained = len(self.records) > 0
@@ -53,11 +55,11 @@ class FaceRecognitionService:
 
     def _load_embeddings(self):
         path = self._embedding_path()
-        if not os.path.exists(path):
+        if not path.exists():
             return []
 
         try:
-            with open(path, 'rb') as f:
+            with path.open('rb') as f:
                 payload = pickle.load(f)
         except Exception as exc:
             logger.warning('[FaceRec] Failed to load embedding store: %s', exc)
@@ -79,8 +81,8 @@ class FaceRecognitionService:
         return loaded
 
     def _save_embeddings(self):
-        os.makedirs(os.path.dirname(self._embedding_path()), exist_ok=True)
-        with open(self._embedding_path(), 'wb') as f:
+        self._embedding_path().parent.mkdir(parents=True, exist_ok=True)
+        with self._embedding_path().open('wb') as f:
             pickle.dump({'records': self.records}, f)
         self.is_trained = len(self.records) > 0
 
@@ -171,15 +173,15 @@ class FaceRecognitionService:
         }
 
     def _copy_sample_image(self, person_id, image_path):
-        person_dir = os.path.join(self.known_faces_dir, f'person_{person_id}')
-        os.makedirs(person_dir, exist_ok=True)
+        person_dir = self.known_faces_dir / f'person_{person_id}'
+        person_dir.mkdir(parents=True, exist_ok=True)
 
         source = Path(image_path)
         suffix = source.suffix.lower() or '.jpg'
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        sample_path = os.path.join(person_dir, f'{timestamp}{suffix}')
+        sample_path = person_dir / f'{timestamp}{suffix}'
         shutil.copy2(source, sample_path)
-        return sample_path
+        return str(sample_path)
 
     def recognize(self, image_path):
         """
@@ -327,8 +329,8 @@ class FaceRecognitionService:
     def remove_person(self, person_id):
         """Delete one person's face samples and embeddings."""
         person_id = int(person_id)
-        person_dir = os.path.join(self.known_faces_dir, f'person_{person_id}')
-        if os.path.exists(person_dir):
+        person_dir = self.known_faces_dir / f'person_{person_id}'
+        if person_dir.exists():
             shutil.rmtree(person_dir)
         self.records = [record for record in self.records if record['person_id'] != person_id]
         self._save_embeddings()

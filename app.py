@@ -20,6 +20,7 @@ import os
 import sys
 import logging
 from datetime import datetime
+from pathlib import Path
 
 from flask import Flask
 from flask_socketio import SocketIO
@@ -47,8 +48,9 @@ app.config.from_object(config)
 
 # 确保目录存在
 for dir_path in [config.UPLOAD_FOLDER, config.DETECTION_FOLDER,
-                 config.FACE_FOLDER, config.KNOWN_FACES_FOLDER, config.DATA_DIR]:
-    os.makedirs(dir_path, exist_ok=True)
+                 config.FACE_FOLDER, config.KNOWN_FACES_FOLDER,
+                 config.DATA_DIR, config.INSIGHTFACE_MODEL_ROOT]:
+    Path(dir_path).mkdir(parents=True, exist_ok=True)
 
 # 初始化数据库
 db.init_app(app)

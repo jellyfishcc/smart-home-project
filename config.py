@@ -1,20 +1,20 @@
 """
 智能家居系统 - 配置文件
 """
-import os
+from pathlib import Path
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = Path(__file__).resolve().parent
 
 # 数据库配置
-SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(BASE_DIR, 'data', 'smart_home.db')
+SQLALCHEMY_DATABASE_URI = f"sqlite:///{(BASE_DIR / 'data' / 'smart_home.db').as_posix()}"
 SQLALCHEMY_TRACK_MODIFICATIONS = False
 
 # 文件上传路径
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
-DETECTION_FOLDER = os.path.join(UPLOAD_FOLDER, 'detections')
-FACE_FOLDER = os.path.join(UPLOAD_FOLDER, 'faces')
-KNOWN_FACES_FOLDER = os.path.join(BASE_DIR, 'known_faces')
-DATA_DIR = os.path.join(BASE_DIR, 'data')
+UPLOAD_FOLDER = BASE_DIR / 'uploads'
+DETECTION_FOLDER = UPLOAD_FOLDER / 'detections'
+FACE_FOLDER = UPLOAD_FOLDER / 'faces'
+KNOWN_FACES_FOLDER = BASE_DIR / 'known_faces'
+DATA_DIR = BASE_DIR / 'data'
 
 # 允许的文件类型
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp'}
@@ -27,9 +27,9 @@ YOLO_CONF_THRESHOLD = 0.4   # 置信度阈值
 FACE_CONFIDENCE_THRESHOLD = 70  # LBPH 置信度阈值（越低越匹配）
 FACE_CASCADE_PATH = None  # 自动查找 OpenCV 自带的级联分类器
 FACE_MATCH_THRESHOLD = 0.45
-FACE_EMBEDDINGS_PATH = os.path.join(DATA_DIR, 'face_embeddings.pkl')
+FACE_EMBEDDINGS_PATH = DATA_DIR / 'face_embeddings.pkl'
 INSIGHTFACE_MODEL_NAME = 'buffalo_l'
-INSIGHTFACE_MODEL_ROOT = r'D:\myproject\face-recognition\models'
+INSIGHTFACE_MODEL_ROOT = BASE_DIR / 'models'
 INSIGHTFACE_DET_SIZE = (320, 320)
 
 # 温度阈值（摄氏度）
