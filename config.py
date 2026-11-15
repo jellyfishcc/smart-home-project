@@ -25,6 +25,8 @@ YOLO_CUSTOM_MODEL = BASE_DIR / 'models' / 'yolo' / 'best.pt'
 YOLO_FALLBACK_MODEL = BASE_DIR / 'yolov8n.pt'
 YOLO_MODEL = YOLO_CUSTOM_MODEL if YOLO_CUSTOM_MODEL.exists() else YOLO_FALLBACK_MODEL
 YOLO_CONF_THRESHOLD = 0.4
+YOLO_BULB_MODEL = BASE_DIR / 'models' / 'yolo' / 'light_bulb.pt'
+YOLO_BULB_CONF_THRESHOLD = 0.5
 
 # 服务器端摄像头配置。
 # 默认明确使用香橙派/Linux 的 /dev/video0，避免在 Windows 本地误读电脑摄像头。

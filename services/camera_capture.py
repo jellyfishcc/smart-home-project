@@ -5,6 +5,8 @@ from pathlib import Path
 
 import cv2
 
+from services.image_io import write_image
+
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,7 @@ def capture_camera_frame(camera_source, output_path: str | Path, warmup_frames: 
             logger.warning('[Camera] %s', message)
             return {'success': False, 'error': message}
 
-        if not cv2.imwrite(str(output_path), frame):
+        if not write_image(output_path, frame):
             message = f'Unable to write camera frame: {output_path}'
             logger.warning('[Camera] %s', message)
             return {'success': False, 'error': message}
