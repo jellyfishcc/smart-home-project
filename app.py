@@ -102,7 +102,7 @@ def _log_device_status(device_name, status, value, source):
             status=status,
             value=value,
             source=source,
-            recorded_at=datetime.utcnow(),
+            recorded_at=datetime.now(),
         )
         db.session.add(log)
         db.session.commit()
@@ -117,7 +117,7 @@ def _log_temperature(temp, humidity, fan_activated):
         log = TemperatureLog(
             temperature=temp,
             humidity=humidity,
-            recorded_at=datetime.utcnow(),
+            recorded_at=datetime.now(),
             fan_activated=fan_activated,
         )
         db.session.add(log)

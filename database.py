@@ -77,7 +77,7 @@ def _seed_authorized_persons():
 
 def _seed_temperature_logs():
     """插入过去24小时的温度数据（每30分钟一条）"""
-    now = datetime.utcnow()
+    now = datetime.now()
     for i in range(48):
         recorded_at = now - timedelta(minutes=30 * (47 - i))
         # 模拟温度在 22-32 度之间波动
@@ -98,7 +98,7 @@ def _seed_temperature_logs():
 
 def _seed_device_logs():
     """插入设备状态历史数据"""
-    now = datetime.utcnow()
+    now = datetime.now()
     devices = ['light', 'door', 'window', 'fan', 'ac']
 
     for i in range(50):
@@ -154,7 +154,7 @@ def _seed_device_logs():
 
 def _seed_access_logs():
     """插入门禁访问日志"""
-    now = datetime.utcnow()
+    now = datetime.now()
     persons = AuthorizedPerson.query.all()
 
     for i in range(20):
@@ -186,7 +186,7 @@ def _seed_access_logs():
 
 def _seed_lighting_records():
     """插入灯光操作记录 - 模拟过去24小时的灯光开关数据"""
-    now = datetime.utcnow()
+    now = datetime.now()
     sources = ['manual', 'manual', 'manual', 'remote', 'remote', 'auto_detection', 'auto']
 
     # 模拟多次开关灯场景（过去24小时每30分钟一条记录）
