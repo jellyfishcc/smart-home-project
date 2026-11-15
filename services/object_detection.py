@@ -8,10 +8,10 @@
 """
 import os
 import cv2
-import json
-import numpy as np
 from datetime import datetime
 from pathlib import Path
+
+from services.image_io import read_image, write_image
 
 # COCO 数据集的 80 个类别（YOLOv8 默认）
 COCO_CLASSES = [
@@ -36,22 +36,34 @@ TRIGGER_RULES = {
     'truck': {'action': 'log', 'description': '检测到卡车'},
     'cat': {'action': 'log', 'description': '检测到猫'},
     'dog': {'action': 'log', 'description': '检测到狗'},
-    # 自定义功能：检测到灯泡图片后控制灯
     'bottle': {'action': 'log', 'description': '检测到瓶子'},
-    # 'light bulb' 不是 COCO 类别，但我们通过自定义检测来支持
 }
 
 
 class ObjectDetectionService:
     """YOLO 物体检测服务"""
 
-    def __init__(self, model_name='yolov8n.pt', conf_threshold=0.4, fallback_model=None):
+    def __init__(self, model_name='yolov8n.pt', conf_threshold=0.4, fallback_model=None,
+                 bulb_model=None, bulb_conf_threshold=0.5):
         self.model_name = model_name
         self.fallback_model = fallback_model
         self.conf_threshold = conf_threshold
         self._model = None
         self._available = False
         self._init_model()
+        self.bulb_conf_threshold = bulb_conf_threshold
+        self._bulb_model = None
+        if bulb_model:
+            try:
+                from ultralytics import YOLO
+
+                model = YOLO(str(bulb_model))
+                if set(model.names.values()) != {'light_bulb'}:
+                    raise ValueError('灯泡模型必须仅包含 light_bulb 类别')
+                self._bulb_model = model
+                print(f'[YOLO] 灯泡模型加载成功: {bulb_model}')
+            except Exception as exc:
+                print(f'[YOLO] 灯泡模型加载失败 {bulb_model}: {exc}')
 
     def _init_model(self):
         """初始化 YOLO 模型"""
@@ -103,15 +115,33 @@ class ObjectDetectionService:
             return {'error': f'图片不存在: {image_path}'}
 
         if self._available:
-            return self._detect_with_yolo(image_path, save_path)
+            result = self._detect_with_yolo(image_path, save_path)
         else:
-            return self._detect_fallback(image_path, save_path)
+            result = self._detect_fallback(image_path, save_path)
 
-    def _detect_with_yolo(self, image_path, save_path):
-        """使用 YOLO 模型检测"""
-        results = self._model(image_path, conf=self.conf_threshold, verbose=False)
-        result = results[0]
+        if 'error' in result or self._bulb_model is None:
+            return result
 
+        bulb_result = self._bulb_model(
+            str(image_path), conf=self.bulb_conf_threshold, imgsz=416, verbose=False,
+        )[0]
+        bulb_objects = self._detected_objects(bulb_result)
+        if not bulb_objects:
+            return result
+
+        result_path = str(result['result_image_path'])
+        annotated = read_image(result_path)
+        if annotated is None:
+            return {'error': '无法读取检测结果图'}
+        if not write_image(result_path, bulb_result.plot(img=annotated)):
+            return {'error': '无法保存灯泡检测结果图'}
+
+        result['objects'].extend(bulb_objects)
+        result['count'] = len(result['objects'])
+        return result
+
+    @staticmethod
+    def _detected_objects(result):
         objects = []
         for box in result.boxes:
             cls_id = int(box.cls[0])
@@ -124,13 +154,20 @@ class ObjectDetectionService:
                 'confidence': round(conf, 3),
                 'bbox': [x1, y1, x2, y2],
             })
+        return objects
+
+    def _detect_with_yolo(self, image_path, save_path):
+        """使用 YOLO 模型检测"""
+        result = self._model(image_path, conf=self.conf_threshold, verbose=False)[0]
+        objects = self._detected_objects(result)
 
         # 保存标注后的图片
         if save_path is None:
             save_path = image_path.replace('.', '_detected.')
 
         annotated = result.plot()
-        cv2.imwrite(save_path, annotated)
+        if not write_image(save_path, annotated):
+            return {'error': '无法保存检测结果图'}
 
         return {
             'objects': objects,
@@ -140,8 +177,8 @@ class ObjectDetectionService:
         }
 
     def _detect_fallback(self, image_path, save_path):
-        """降级模式：使用 OpenCV 基础检测（人脸+轮廓）"""
-        img = cv2.imread(image_path)
+        """降级模式：使用 OpenCV 检测人脸"""
+        img = read_image(image_path)
         if img is None:
             return {'error': '无法读取图片'}
 
@@ -168,23 +205,8 @@ class ObjectDetectionService:
             cv2.putText(annotated, 'person 0.85', (x, y - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-        # 检测灯泡形状（圆形检测作为自定义功能）
-        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1, minDist=80,
-                                   param1=50, param2=30, minRadius=20, maxRadius=100)
-        if circles is not None:
-            circles = np.round(circles[0, :]).astype('int')
-            for (x, y, r) in circles:
-                objects.append({
-                    'class': 'light_bulb',
-                    'class_id': -1,
-                    'confidence': 0.70,
-                    'bbox': [float(x - r), float(y - r), float(x + r), float(y + r)],
-                })
-                cv2.circle(annotated, (x, y), r, (0, 200, 255), 3)
-                cv2.putText(annotated, 'light_bulb 0.70', (x - r, y - r - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
-
-        cv2.imwrite(save_path, annotated)
+        if not write_image(save_path, annotated):
+            return {'error': '无法保存检测结果图'}
 
         return {
             'objects': objects,
@@ -233,6 +255,7 @@ class ObjectDetectionService:
         detection_dir = Path(__file__).resolve().parents[1] / 'uploads' / 'detections'
         detection_dir.mkdir(parents=True, exist_ok=True)
         temp_path = detection_dir / f'camera_{timestamp}.jpg'
-        cv2.imwrite(str(temp_path), frame)
+        if not write_image(temp_path, frame):
+            return {'error': '无法保存摄像头画面'}
 
         return self.detect(str(temp_path))

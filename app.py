@@ -65,6 +65,8 @@ detection_service = ObjectDetectionService(
     model_name=config.YOLO_MODEL,
     conf_threshold=config.YOLO_CONF_THRESHOLD,
     fallback_model=config.YOLO_FALLBACK_MODEL,
+    bulb_model=config.YOLO_BULB_MODEL,
+    bulb_conf_threshold=config.YOLO_BULB_CONF_THRESHOLD,
 )
 app.config['DETECTION_SERVICE'] = detection_service
 
