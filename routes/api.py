@@ -197,7 +197,7 @@ def _process_access_image(file_path, filename):
     log = AccessLog(
         person_id=person.id if person else None,
         person_name=person.name if person else '未知',
-        access_time=datetime.utcnow(),
+        access_time=datetime.now(),
         access_result=access_result,
         confidence=result.get('confidence'),
         image_path=file_path,
@@ -290,7 +290,7 @@ def recognize_face():
     log = AccessLog(
         person_id=person.id if person else None,
         person_name=person.name if person else '未知',
-        access_time=datetime.utcnow(),
+        access_time=datetime.now(),
         access_result=access_result,
         confidence=result.get('confidence'),
         image_path=file_path,
@@ -417,7 +417,7 @@ def upload_and_detect():
         result_image_path=f'/api/files/detections/{result_filename}',
         objects_detected=json.dumps(result['objects'], ensure_ascii=False),
         object_count=result['count'],
-        detected_at=datetime.utcnow(),
+        detected_at=datetime.now(),
         source='upload',
         triggered_action=triggered_action,
     )
@@ -480,7 +480,7 @@ def detect_from_camera():
         result_image_path=f'/api/files/detections/{result_filename}',
         objects_detected=json.dumps(result['objects'], ensure_ascii=False),
         object_count=result['count'],
-        detected_at=datetime.utcnow(),
+        detected_at=datetime.now(),
         source='camera',
         triggered_action=triggered_action,
     )
@@ -617,7 +617,7 @@ def get_temperature_history():
     hours = request.args.get('hours', 24, type=int)
     interval = request.args.get('interval', 'auto')  # auto/hour/day
 
-    since = datetime.utcnow() - timedelta(hours=hours)
+    since = datetime.now() - timedelta(hours=hours)
     query = TemperatureLog.query.filter(TemperatureLog.recorded_at >= since)
 
     if interval == 'hour':
@@ -652,7 +652,7 @@ def get_device_history():
     hours = request.args.get('hours', 24, type=int)
     device_name = request.args.get('device')
 
-    since = datetime.utcnow() - timedelta(hours=hours)
+    since = datetime.now() - timedelta(hours=hours)
     query = DeviceStatusLog.query.filter(DeviceStatusLog.recorded_at >= since)
 
     if device_name:
@@ -672,7 +672,7 @@ def get_device_history():
 def get_device_summary():
     """设备状态统计摘要"""
     hours = request.args.get('hours', 24, type=int)
-    since = datetime.utcnow() - timedelta(hours=hours)
+    since = datetime.now() - timedelta(hours=hours)
 
     devices = ['light', 'door', 'window', 'fan', 'ac']
     summary = {}
@@ -784,7 +784,7 @@ def get_lighting_history():
 def get_lighting_stats():
     """获取灯光使用统计数据"""
     hours = request.args.get('hours', 24, type=int)
-    since = datetime.utcnow() - timedelta(hours=hours)
+    since = datetime.now() - timedelta(hours=hours)
 
     records = LightingRecord.query.filter(
         LightingRecord.recorded_at >= since
@@ -870,7 +870,7 @@ def get_lighting_stats():
 def get_lighting_daily_summary():
     """获取灯光每日摘要统计"""
     days = request.args.get('days', 7, type=int)
-    since = datetime.utcnow() - timedelta(days=days)
+    since = datetime.now() - timedelta(days=days)
 
     records = LightingRecord.query.filter(
         LightingRecord.recorded_at >= since
