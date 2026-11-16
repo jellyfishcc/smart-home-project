@@ -68,6 +68,8 @@ detection_service = ObjectDetectionService(
     model_name=config.YOLO_MODEL,
     conf_threshold=config.YOLO_CONF_THRESHOLD,
     fallback_model=config.YOLO_FALLBACK_MODEL,
+    bulb_model=config.YOLO_BULB_MODEL,
+    bulb_conf_threshold=config.YOLO_BULB_CONF_THRESHOLD,
 )
 app.config['DETECTION_SERVICE'] = detection_service
 
@@ -115,7 +117,7 @@ def _log_device_status(device_name, status, value, source):
             status=status,
             value=value,
             source=source,
-            recorded_at=datetime.utcnow(),
+            recorded_at=datetime.now(),
         )
         db.session.add(log)
         db.session.commit()
@@ -135,7 +137,7 @@ def _log_temperature(temp, humidity, fan_activated):
         log = TemperatureLog(
             temperature=temp,
             humidity=humidity,
-            recorded_at=datetime.utcnow(),
+            recorded_at=datetime.now(),
             fan_activated=fan_activated,
         )
         db.session.add(log)

@@ -22,8 +22,8 @@ class AuthorizedPerson(db.Model):
     face_encoding_path = db.Column(db.String(500), comment='人脸特征数据文件路径')
     phone = db.Column(db.String(20), comment='联系电话')
     department = db.Column(db.String(100), comment='部门')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
     access_logs = db.relationship('AccessLog', backref='person', lazy=True)
 
@@ -50,7 +50,7 @@ class AccessLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     person_id = db.Column(db.Integer, db.ForeignKey('authorized_persons.id'), nullable=True, comment='人员ID(未识别时为空)')
     person_name = db.Column(db.String(100), comment='识别到的人员姓名')
-    access_time = db.Column(db.DateTime, default=datetime.utcnow, comment='访问时间')
+    access_time = db.Column(db.DateTime, default=datetime.now, comment='访问时间')
     access_result = db.Column(db.String(20), nullable=False, comment='结果: granted/denied/unknown')
     confidence = db.Column(db.Float, comment='识别置信度')
     image_path = db.Column(db.String(500), comment='抓拍照片路径')
@@ -78,7 +78,7 @@ class TemperatureLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     temperature = db.Column(db.Float, nullable=False, comment='温度值(摄氏度)')
     humidity = db.Column(db.Float, comment='湿度(%)')
-    recorded_at = db.Column(db.DateTime, default=datetime.utcnow, comment='记录时间')
+    recorded_at = db.Column(db.DateTime, default=datetime.now, comment='记录时间')
     fan_activated = db.Column(db.Boolean, default=False, comment='是否触发了风扇')
 
     def to_dict(self):
@@ -100,7 +100,7 @@ class DeviceStatusLog(db.Model):
     status = db.Column(db.String(100), nullable=False, comment='状态JSON字符串')
     value = db.Column(db.String(100), comment='数值(如亮度、风速)')
     source = db.Column(db.String(50), default='manual', comment='操作来源: manual/auto/sensor/remote')
-    recorded_at = db.Column(db.DateTime, default=datetime.utcnow, comment='记录时间')
+    recorded_at = db.Column(db.DateTime, default=datetime.now, comment='记录时间')
 
     def to_dict(self):
         return {
@@ -122,7 +122,7 @@ class DetectionRecord(db.Model):
     result_image_path = db.Column(db.String(500), comment='标注后图片路径')
     objects_detected = db.Column(db.Text, comment='检测到的物体JSON列表')
     object_count = db.Column(db.Integer, default=0, comment='检测到的物体总数')
-    detected_at = db.Column(db.DateTime, default=datetime.utcnow, comment='检测时间')
+    detected_at = db.Column(db.DateTime, default=datetime.now, comment='检测时间')
     source = db.Column(db.String(50), default='upload', comment='来源: upload/camera/auto')
     triggered_action = db.Column(db.String(200), comment='触发的动作(如检测到灯泡后开灯)')
 
@@ -150,7 +150,7 @@ class LightingRecord(db.Model):
     source = db.Column(db.String(50), default='manual', comment='操作来源: manual/remote/auto/auto_detection')
     duration_seconds = db.Column(db.Integer, default=0, comment='本次状态持续时长(秒)，关灯时计算')
     energy_wh = db.Column(db.Float, default=0.0, comment='本次能耗(瓦时)，按亮度比例估算')
-    recorded_at = db.Column(db.DateTime, default=datetime.utcnow, comment='记录时间')
+    recorded_at = db.Column(db.DateTime, default=datetime.now, comment='记录时间')
     last_on_time = db.Column(db.DateTime, comment='最近一次开灯时间，用于计算持续时长')
 
     def to_dict(self):

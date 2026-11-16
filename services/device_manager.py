@@ -117,7 +117,7 @@ class DeviceManager:
 
         # 灯光专用记录
         if device_name == 'light' and record_log and self._lighting_logger:
-            now = datetime.utcnow()
+            now = datetime.now()
             is_on = new_state.get('on', False)
             brightness = new_state.get('brightness', 0)
             self._lighting_logger(
