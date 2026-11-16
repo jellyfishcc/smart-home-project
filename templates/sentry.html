@@ -1,0 +1,115 @@
+{% extends 'base.html' %}
+{% block title %}哨兵模式{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-title">哨兵模式</div>
+        <div class="page-subtitle"><span class="live-dot"></span> 布防值守 · 定时巡检 · 异常留证</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+        <span class="badge badge-warning" id="sentryDemoBadge" style="display:none;">演示数据</span>
+        <span class="badge badge-secondary" id="sentryHeaderBadge">已撤防</span>
+        <button class="btn btn-sm btn-outline" id="sentryPatrolBtn" title="立即执行一轮巡检">
+            <i class="bi bi-arrow-clockwise"></i> 立即巡检
+        </button>
+        <button class="btn btn-sm btn-danger" id="sentrySimulateBtn" title="注入一次入侵，用于现场演示">
+            <i class="bi bi-exclamation-triangle"></i> 模拟入侵
+        </button>
+        <button class="btn btn-sm btn-outline" id="sentryClearAlarmBtn" title="解除当前告警并恢复灯光，哨兵继续值守">
+            <i class="bi bi-shield-check"></i> 解除告警
+        </button>
+    </div>
+</div>
+
+<!-- 哨兵开关 -->
+<div class="card sentry-control">
+    <div class="sentry-switch-wrap">
+        <label class="switch switch-lg">
+            <input type="checkbox" id="sentryToggle">
+            <span class="slider"></span>
+        </label>
+        <div>
+            <div class="sentry-state-text" id="sentryStateText">哨兵已撤防</div>
+            <div class="sentry-state-sub" id="sentryStateSub">开启后按设定间隔自动巡检摄像头，发现异常立即告警</div>
+        </div>
+    </div>
+    <div class="sentry-meta">
+        <div class="sentry-meta-item">
+            <span>布防模式</span>
+            <strong id="sentryModeText">离家布防</strong>
+        </div>
+        <div class="sentry-meta-item">
+            <span>巡检间隔</span>
+            <strong id="sentryIntervalText">10 秒</strong>
+        </div>
+        <div class="sentry-meta-item">
+            <span>上次巡检</span>
+            <strong id="sentryLastPatrol">--</strong>
+        </div>
+    </div>
+
+    <!-- 每轮巡检结论：无人 / 未识别人员活动 / 已录入人脸 / 报警 -->
+    <div class="sentry-round" id="sentryRound" data-state="idle">
+        <span class="sentry-round-dot"></span>
+        <strong class="sentry-round-label" id="sentryRoundLabel">等待巡检</strong>
+        <span class="sentry-round-detail" id="sentryRoundDetail">布防后每轮巡检结束在此更新结论</span>
+        <span class="sentry-round-time" id="sentryRoundTime">--:--:--</span>
+    </div>
+</div>
+
+<!-- 播放器 + 片段列表 -->
+<div class="sentry-layout">
+    <div class="card sentry-player-card">
+        <div class="card-header">
+            <h5><i class="bi bi-camera-video"></i> 监控画面</h5>
+            <div class="sentry-player-tools">
+                <div class="sentry-mode-switch" id="sentryModeSwitch">
+                    <button type="button" class="active" data-mode="live">实时</button>
+                    <button type="button" data-mode="replay">回放</button>
+                </div>
+                <span class="badge badge-secondary" id="playerBadge">未接入视频源</span>
+            </div>
+        </div>
+        <div class="card-body" style="padding:0;">
+            <div class="sentry-player">
+                <img id="sentryLive" class="sentry-live" alt="实时画面" hidden>
+                <video id="sentryVideo" playsinline controls hidden></video>
+                <div class="sentry-player-empty" id="sentryNoSignal">
+                    <i class="bi bi-camera-video-off"></i>
+                    <p id="sentryNoSignalText">未接入视频源</p>
+                    <span id="sentryNoSignalSub">录像文件接入后在此播放</span>
+                </div>
+                <div class="sentry-scanlines"></div>
+                <div class="sentry-hud">
+                    <div class="sentry-hud-top">
+                        <span class="sentry-hud-channel">
+                            <span class="sentry-rec" id="hudRec"></span>
+                            <span id="hudChannel">CAM-01 门口</span>
+                        </span>
+                        <span class="sentry-hud-clock" id="hudClock">--:--:--</span>
+                    </div>
+                    <div class="sentry-hud-bottom">
+                        <div class="sentry-hud-title" id="hudTitle">未选择片段</div>
+                        <div class="sentry-hud-meta" id="hudMeta">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card sentry-clip-card">
+        <div class="card-header">
+            <h5><i class="bi bi-collection-play"></i> 监控片段</h5>
+            <span class="badge badge-info" id="clipCount">0 段</span>
+        </div>
+        <div class="sentry-clip-list" id="sentryClipList">
+            <div class="sentry-empty">加载中...</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/sentry.js') }}"></script>
+{% endblock %}

@@ -25,3 +25,7 @@ models/*
 .agents/
 MobaXterm*
 venv/
+
+# 本地缓存（pip/uv/tmp，避免写 C 盘）
+.cache/
+.workbuddy/

@@ -25,6 +25,12 @@ def object_detection():
     return render_template('object_detection.html', active_page='detection')
 
 
+@pages_bp.route('/sentry')
+def sentry_mode():
+    """哨兵模式页面"""
+    return render_template('sentry.html', active_page='sentry')
+
+
 @pages_bp.route('/devices')
 def device_control():
     """设备控制页面"""

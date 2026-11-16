@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 智能家居管理系统 (Smart Home Management System)
 
 > 以安全和舒适为重点的智能家居系统原型 — 软件部分
@@ -244,42 +243,30 @@ python app.py
 - **设备日志**：过去50小时设备状态变化记录
 - **门禁日志**：20条访问记录（含允许/拒绝/未知）
 - **灯光记录**：过去24小时灯光开关记录（48条，按作息规律模拟）
-=======
-# smart home project
 
-## 使用 face-recognition 模块
+## 哨兵功能v0.1
+暂时将人脸逻辑改为：采集线程持续从摄像机视频流采集图片，若香橙派摄像头无法实现
 
-主项目已经在 `pyproject.toml` 中以 editable 方式引用 `face-recognition`，先安装依赖：
+### 图片采集策略
 
-```powershell
-uv sync
-```
+**只开一次摄像头，所有模块按需从同一路视频流取帧**，不再各自 `cv2.VideoCapture` 抢占设备（Windows 与香橙派摄像头通常独占）。
 
-首次克隆项目后，模型文件不会随 GitHub 自动下载。运行下面命令会把 InsightFace 的 `buffalo_l` 模型准备到 `face-recognition/models/models/buffalo_l/`：
+| 环节 | 做法 |
+|------|------|
+| 采集 | `services/camera_stream.py` 启动一个常驻采集线程，独占一路 `cv2.VideoCapture`（设备由 `config.CAMERA_SOURCE` 指定），持续读帧 |
+| 分发 | 不用帧队列，只维护「最新帧 + 单调递增 `seq`」，靠条件变量唤醒等待者；各消费者记住自己的 `last_seq` 去重，慢消费者不会积压延迟，也不会把帧从别人手里抢走 |
+| 取帧 | 巡检每轮先取最新帧（`max_age=3s`，超过即视为摄像头卡住）；需要留证连拍时以当前 `seq` 为基准逐张 `wait_for_frame`，按 `SENTRY_BURST_GAP`（默认 0.12s）间隔抓 `SENTRY_BURST_FRAMES`（默认 5）张，凑成一小段"短录像"；取不到新帧就复用首帧，保证告警一定有图 |
+| 健康检查 | 每 5 帧算一次平均亮度，低于 12 判为画面过暗/遮挡；连续读帧失败 5 次自动重开设备（间隔 2s）。哨兵遇到暗帧只记「跳过检测」，不误判入侵 |
+| 节奏与落盘 | 布防后每 `SENTRY_PATROL_INTERVAL`（默认 10s）巡检一轮：取帧 → YOLO 人形检测（只取 person 类，conf 0.35）→ 人脸核验 → 判定/告警；命中人员的快照写入 `uploads/sentry/`，命名 `YYYYMMDD_HHMMSS_毫秒_序号.jpg`，经 `/api/files/sentry/<name>` 访问 |
 
-```powershell
-uv run python scripts/download_face_models.py
-```
+推理（YOLO 人形检测、人脸核验）全部放在巡检线程里做，采集线程只负责读帧和分发，帧回调必须毫秒级返回，避免拖慢采集帧率。
 
-在主程序里直接导入 `smart_home_face` 提供的构建函数，启动时创建一次授权器，后续拿摄像头抓拍图或本地图片做校验：
+### 哨兵策略
+1.每隔10秒从采集线程中取1帧，yolov8检测是否有人，若有人则进行人脸识别，识别为已录入的人脸或本轮无人则回归初始状态，
+2.1若检测到未录入人脸则连续从采集线程中抽取10帧作为证据，并将停留计数器加1
+3.若计数器达到3则触发告警，并留下证据
+4.若计数器达到3前识别到已录入人脸或无人则清除证据和计数器
 
-```python
-from smart_home_face.cli import build_authorizer
-
-authorizer = build_authorizer()
-result = authorizer.verify_image("path/to/camera_snapshot.jpg")
-
-if result.authorized:
-    # 开门或执行已授权逻辑
-    print(result.person, result.door_action)
-else:
-    # 拒绝开门或提示未授权
-    print(result.result, result.message)
-```
-
-授权人脸照片放在 `face-recognition/authorized_faces/<人员名>/` 目录下，每个人一个文件夹。也可以先用命令行快速验证单张图片：
-
-```powershell
-uv run smart-home-face-verify path\to\camera_snapshot.jpg
-```
->>>>>>> origin/main
+下一步：
+优化策略
+哨兵页面增加更多内容，例如显示当前状态

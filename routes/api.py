@@ -11,16 +11,20 @@
 import os
 import json
 import time
+import logging
 from datetime import datetime, timedelta
-from flask import Blueprint, request, jsonify, current_app, send_from_directory
+from flask import Blueprint, request, jsonify, current_app, send_from_directory, Response
 from werkzeug.utils import secure_filename
 
-from models import db, AuthorizedPerson, AccessLog, TemperatureLog, DeviceStatusLog, DetectionRecord, LightingRecord
+from models import (db, AuthorizedPerson, AccessLog, TemperatureLog, DeviceStatusLog,
+                    DetectionRecord, LightingRecord, SentryEvent)
 from services.device_manager import device_manager
 from services.sensor_simulator import sensor_simulator
 from services.camera_capture import capture_camera_frame
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
+
+logger = logging.getLogger(__name__)
 
 
 def allowed_file(filename):
@@ -948,3 +952,315 @@ def _aggregate_by_hour(logs, field):
             'count': len(values),
         })
     return result
+
+
+# ============================================================
+# 9. 哨兵模式 API
+#    前端约定：统一 {code, message, data}；code != 0 视为失败。
+#    告警时间由服务端按本地时间返回，前端 new Date() 解析不会偏移。
+# ============================================================
+
+def _sentry():
+    return current_app.config.get('SENTRY_SERVICE')
+
+
+@api_bp.route('/sentry/status', methods=['GET'])
+def sentry_status():
+    """哨兵当前状态：是否布防、模式、间隔、上次巡检、统计"""
+    service = _sentry()
+    if service is None:
+        return jsonify({'code': 1, 'message': '哨兵服务未初始化', 'data': None})
+    return jsonify({'code': 0, 'message': 'success', 'data': service.get_status()})
+
+
+@api_bp.route('/sentry/arm', methods=['POST'])
+def sentry_arm():
+    """布防。body: {mode: away|home, interval?: 秒, delay?: 秒}"""
+    service = _sentry()
+    if service is None:
+        return jsonify({'code': 1, 'message': '哨兵服务未初始化', 'data': None})
+
+    payload = request.get_json(silent=True) or {}
+    mode = payload.get('mode', 'away')
+    if payload.get('interval') is not None:
+        try:
+            service.set_interval(int(payload['interval']))
+        except (TypeError, ValueError):
+            return jsonify({'code': 1, 'message': 'interval 必须是整数', 'data': None})
+
+    delay = payload.get('delay')
+    status = service.start(mode=mode, delay=delay)
+    return jsonify({'code': 0, 'message': 'success', 'data': status})
+
+
+@api_bp.route('/sentry/disarm', methods=['POST'])
+def sentry_disarm():
+    """撤防"""
+    service = _sentry()
+    if service is None:
+        return jsonify({'code': 1, 'message': '哨兵服务未初始化', 'data': None})
+    return jsonify({'code': 0, 'message': 'success', 'data': service.stop()})
+
+
+@api_bp.route('/sentry/patrol', methods=['POST'])
+def sentry_patrol():
+    """立即执行一轮巡检（不改变布防状态，供调试）
+
+    body: {image_path?: 服务器本地图片路径}
+    传 image_path 时用该图片替代摄像头帧，并假定画面中有 1 人，
+    便于验证「授权放行 / 未授权告警」两条分支。
+    """
+    service = _sentry()
+    if service is None:
+        return jsonify({'code': 1, 'message': '哨兵服务未初始化', 'data': None})
+    payload = request.get_json(silent=True) or {}
+    result = service.patrol_once(source='manual', image_path=payload.get('image_path'))
+    return jsonify({'code': 0, 'message': 'success', 'data': result})
+
+
+@api_bp.route('/sentry/simulate', methods=['POST'])
+def sentry_simulate():
+    """模拟入侵（现场演示专用）。
+
+    body: {image_path?: 服务器本地图片路径, note?: 备注}
+    不传 image_path 时用摄像头当前帧；该入口强制告警，不受冷却限制。
+    """
+    service = _sentry()
+    if service is None:
+        return jsonify({'code': 1, 'message': '哨兵服务未初始化', 'data': None})
+
+    payload = request.get_json(silent=True) or {}
+    result = service.simulate_intrusion(
+        image_path=payload.get('image_path'),
+        note=payload.get('note') or '模拟入侵（演示）',
+        force=bool(payload.get('force', True)),
+    )
+    if not result.get('ok'):
+        return jsonify({'code': 1, 'message': result.get('reason', '模拟失败'), 'data': result})
+    return jsonify({'code': 0, 'message': 'success', 'data': result})
+
+
+@api_bp.route('/sentry/clips', methods=['GET'])
+def sentry_clips():
+    """监控片段列表（由告警/巡检事件生成的留证序列）"""
+    service = _sentry()
+    if service is None:
+        return jsonify({'code': 1, 'message': '哨兵服务未初始化', 'data': None})
+
+    limit = min(50, max(1, request.args.get('limit', 20, type=int) or 20))
+    records = (SentryEvent.query
+               .order_by(SentryEvent.created_at.desc(), SentryEvent.id.desc())
+               .limit(limit).all())
+    return jsonify({'code': 0, 'message': 'success', 'data': [r.to_dict() for r in records]})
+
+
+@api_bp.route('/sentry/events', methods=['GET'])
+def sentry_events():
+    """告警事件流，支持按处理状态筛选与分页"""
+    status = request.args.get('status')
+    limit = min(100, max(1, request.args.get('limit', 20, type=int) or 20))
+    offset = max(0, request.args.get('offset', 0, type=int) or 0)
+
+    query = SentryEvent.query
+    if status:
+        query = query.filter_by(status=status)
+    total = query.count()
+    records = (query.order_by(SentryEvent.created_at.desc(), SentryEvent.id.desc())
+               .offset(offset).limit(limit).all())
+    return jsonify({
+        'code': 0,
+        'message': 'success',
+        'data': {
+            'total': total,
+            'items': [r.to_dict() for r in records],
+        },
+    })
+
+
+@api_bp.route('/sentry/events/<int:event_id>/handle', methods=['POST'])
+def sentry_handle_event(event_id):
+    """标记事件处理结果：acknowledged / false_alarm"""
+    payload = request.get_json(silent=True) or {}
+    status = payload.get('status', 'acknowledged')
+    if status not in ('acknowledged', 'false_alarm'):
+        return jsonify({'code': 1, 'message': 'status 只能是 acknowledged 或 false_alarm', 'data': None})
+
+    event = db.session.get(SentryEvent, event_id)
+    if event is None:
+        return jsonify({'code': 1, 'message': '事件不存在', 'data': None})
+    event.status = status
+    event.handled_at = datetime.now()
+    db.session.commit()
+    return jsonify({'code': 0, 'message': 'success', 'data': event.to_dict()})
+
+
+@api_bp.route('/sentry/alarm/clear', methods=['POST'])
+def sentry_clear_alarm():
+    """开发者手动解除告警：归档事件、清零轨迹、恢复灯光，哨兵继续值守。
+
+    与 /disarm 的区别：撤防是关掉哨兵，这个只是「这件事处理完了」。
+    """
+    service = _sentry()
+    if service is None:
+        return jsonify({'code': 1, 'message': '哨兵服务未初始化', 'data': None})
+    payload = request.get_json(silent=True) or {}
+    return jsonify({
+        'code': 0,
+        'message': 'success',
+        'data': service.clear_alarm(
+            operator=payload.get('operator') or 'developer',
+            reason=payload.get('reason') or '手动解除',
+        ),
+    })
+
+
+@api_bp.route('/sentry/events/<int:event_id>', methods=['DELETE'])
+def sentry_delete_event(event_id):
+    """删除单条记录，并清掉它名下的留证文件。"""
+    service = _sentry()
+    event = db.session.get(SentryEvent, event_id)
+    if event is None:
+        return jsonify({'code': 1, 'message': '记录不存在', 'data': None})
+
+    removed = service.delete_event_files(event) if service else 0
+    db.session.delete(event)
+    db.session.commit()
+    return jsonify({'code': 0, 'message': 'success',
+                    'data': {'id': event_id, 'files': removed}})
+
+
+@api_bp.route('/sentry/events', methods=['DELETE'])
+def sentry_clear_events():
+    """清空全部记录（含留证文件）。演示前重置现场用。"""
+    service = _sentry()
+    events = SentryEvent.query.all()
+    removed = 0
+    for event in events:
+        if service:
+            removed += service.delete_event_files(event)
+        db.session.delete(event)
+    db.session.commit()
+    return jsonify({'code': 0, 'message': 'success',
+                    'data': {'deleted': len(events), 'files': removed}})
+
+
+# ============================================================
+# 10. 摄像头实时画面
+#     MJPEG 推流 + 单帧快照，都复用常驻 camera_stream，
+#     绝不自己 open 设备（Windows 摄像头独占，会抢掉哨兵与检测接口）。
+# ============================================================
+
+def _camera_hub():
+    return current_app.config.get('CAMERA_STREAM')
+
+
+def _ensure_camera_running(hub):
+    """采集线程是惰性启动的，第一次访问画面时才真正打开设备。"""
+    if hub is None:
+        return False
+    if not hub.running:
+        hub.start()
+    return True
+
+
+def _encode_jpeg(image, quality=80, max_width=None):
+    """编码为 JPEG 字节串。max_width 用于限制推流分辨率，降低带宽与编码开销。"""
+    import cv2
+
+    if max_width and image.shape[1] > max_width:
+        ratio = max_width / float(image.shape[1])
+        size = (max_width, max(1, int(image.shape[0] * ratio)))
+        image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+
+    ok, buffer = cv2.imencode('.jpg', image, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    return buffer.tobytes() if ok else None
+
+
+def _mjpeg_generator(hub, fps):
+    """逐帧产出 multipart MJPEG。
+
+    注意：生成器在请求上下文销毁后才迭代，因此绝不能在里面访问 current_app，
+    所有依赖都在进入生成器之前取好（这里只用到 hub 本身）。
+    """
+    boundary = b'--frame\r\nContent-Type: image/jpeg\r\n'
+    interval = 1.0 / fps
+    last_seq = -1
+    empty_rounds = 0
+
+    try:
+        while True:
+            frame = hub.wait_for_frame(after_seq=last_seq, timeout=4.0, copy=False)
+            if frame is None:
+                # 设备被拔出/未就绪时会一直取不到帧，连续两轮就结束，
+                # 让浏览器触发 onerror，前端降级为「未接入」提示，避免无响应挂死
+                empty_rounds += 1
+                if empty_rounds >= 2 or not hub.running:
+                    logger.warning('[Camera] 推流结束：连续无可用帧')
+                    break
+                continue
+
+            empty_rounds = 0
+            last_seq = frame.seq
+            payload = _encode_jpeg(frame.image, quality=70, max_width=960)
+            if payload is None:
+                continue
+
+            yield boundary + b'Content-Length: %d\r\n\r\n' % len(payload) + payload + b'\r\n'
+            time.sleep(interval)
+    except GeneratorExit:
+        return
+    except Exception:
+        logger.exception('[Camera] 推流异常')
+
+
+@api_bp.route('/camera/snapshot', methods=['GET'])
+def camera_snapshot():
+    """单帧 JPEG。用于前端探活、缩略图、以及 <img> 定时刷新。"""
+    hub = _camera_hub()
+    if not _ensure_camera_running(hub):
+        return jsonify({'code': 1, 'message': '摄像头服务未初始化'}), 503
+
+    frame = hub.get_frame(copy=False, max_age=2.0)
+    if frame is None:
+        frame = hub.wait_for_frame(after_seq=-1, timeout=3.0, copy=False)
+    if frame is None:
+        error = hub.status().get('error') or '摄像头暂无可用画面'
+        return jsonify({'code': 1, 'message': error}), 503
+
+    payload = _encode_jpeg(frame.image, quality=85)
+    if payload is None:
+        return jsonify({'code': 1, 'message': 'JPEG 编码失败'}), 500
+
+    resp = Response(payload, mimetype='image/jpeg')
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return resp
+
+
+@api_bp.route('/camera/stream', methods=['GET'])
+def camera_live_stream():
+    """实时画面：multipart/x-mixed-replace，浏览器 <img> 可直接当视频播放。"""
+    hub = _camera_hub()
+    if not _ensure_camera_running(hub):
+        return jsonify({'code': 1, 'message': '摄像头服务未初始化'}), 503
+
+    try:
+        fps = max(1, min(15, int(request.args.get('fps', 8))))
+    except (TypeError, ValueError):
+        fps = 8
+
+    resp = Response(
+        _mjpeg_generator(hub, fps),
+        mimetype='multipart/x-mixed-replace; boundary=frame',
+    )
+    resp.headers['Cache-Control'] = 'no-store'
+    resp.headers['X-Accel-Buffering'] = 'no'
+    return resp
+
+
+@api_bp.route('/camera/status', methods=['GET'])
+def camera_status():
+    """采集线程健康状态：是否在跑、fps、画面均值、是否过暗。"""
+    hub = _camera_hub()
+    if hub is None:
+        return jsonify({'code': 1, 'message': '摄像头服务未初始化'}), 503
+    return jsonify({'code': 0, 'message': 'success', 'data': hub.status()})

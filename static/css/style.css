@@ -647,3 +647,508 @@ input:checked + .slider:before {
 .toast.success { border-left-color: var(--color-success); }
 .toast.error { border-left-color: var(--color-danger); }
 .toast.warning { border-left-color: var(--color-warning); }
+
+/* ==================== 哨兵模式 ==================== */
+.sentry-control {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 20px 24px;
+    flex-wrap: wrap;
+}
+
+.sentry-switch-wrap {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.switch-lg {
+    width: 60px;
+    height: 32px;
+    flex-shrink: 0;
+}
+
+.switch-lg .slider:before {
+    height: 26px;
+    width: 26px;
+    left: 3px;
+    bottom: 3px;
+}
+
+.switch-lg input:checked + .slider {
+    background: var(--color-danger);
+}
+
+.switch-lg input:checked + .slider:before {
+    transform: translateX(28px);
+}
+
+.sentry-state-text {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.sentry-control.is-armed .sentry-state-text {
+    color: var(--color-danger);
+}
+
+.sentry-state-sub {
+    font-size: 12px;
+    color: var(--color-text-light);
+    margin-top: 3px;
+}
+
+.sentry-meta {
+    display: flex;
+    gap: 32px;
+}
+
+.sentry-meta-item span {
+    display: block;
+    font-size: 11px;
+    color: var(--color-text-light);
+}
+
+.sentry-meta-item strong {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+/* 每轮巡检结论条：无人 / 未识别人员活动 / 已录入人脸 / 报警 */
+.sentry-round {
+    flex: 1 0 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 10px 14px;
+    border: 1px solid var(--color-border);
+    border-left: 3px solid var(--color-text-light);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg);
+    font-size: 13px;
+    color: var(--color-text);
+    transition: var(--transition);
+}
+
+.sentry-round-dot {
+    width: 9px;
+    height: 9px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--color-text-light);
+}
+
+.sentry-round-label {
+    flex-shrink: 0;
+    font-weight: 600;
+}
+
+.sentry-round-detail {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--color-text-light);
+}
+
+.sentry-round-time {
+    margin-left: auto;
+    flex-shrink: 0;
+    color: var(--color-text-light);
+    font-variant-numeric: tabular-nums;
+}
+
+.sentry-round[data-state="clear"] {
+    border-left-color: var(--color-success);
+}
+.sentry-round[data-state="clear"] .sentry-round-dot {
+    background: var(--color-success);
+}
+
+.sentry-round[data-state="authorized"] {
+    border-left-color: var(--color-info);
+    background: rgba(106, 156, 184, 0.08);
+}
+.sentry-round[data-state="authorized"] .sentry-round-dot {
+    background: var(--color-info);
+}
+.sentry-round[data-state="authorized"] .sentry-round-label {
+    color: var(--color-info);
+}
+
+.sentry-round[data-state="activity"] {
+    border-left-color: var(--color-warning);
+    background: rgba(233, 180, 85, 0.1);
+}
+.sentry-round[data-state="activity"] .sentry-round-dot {
+    background: var(--color-warning);
+}
+.sentry-round[data-state="activity"] .sentry-round-label {
+    color: #B07C1E;
+}
+
+.sentry-round[data-state="alarm"] {
+    border-left-color: var(--color-danger);
+    background: rgba(224, 122, 122, 0.1);
+}
+.sentry-round[data-state="alarm"] .sentry-round-dot {
+    background: var(--color-danger);
+    animation: pulse 1.2s ease-in-out infinite;
+}
+.sentry-round[data-state="alarm"] .sentry-round-label {
+    color: var(--color-danger);
+}
+
+.sentry-round[data-state="unavailable"] {
+    border-left-color: var(--color-text-light);
+    background: rgba(138, 138, 138, 0.08);
+}
+
+.sentry-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 20px;
+    /* 用 start 而不是 stretch：否则片段列表把左侧播放卡拉高，画面下方留一片白 */
+    align-items: start;
+}
+
+.sentry-player-card,
+.sentry-clip-card {
+    margin-bottom: 0;
+}
+
+.sentry-clip-card {
+    display: flex;
+    flex-direction: column;
+}
+
+.sentry-player {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background: #0A0C0F;
+    overflow: hidden;
+}
+
+.sentry-player video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    background: #000;
+}
+
+.sentry-player video[hidden] {
+    display: none;
+}
+
+.sentry-live {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    background: #000;
+}
+
+.sentry-live[hidden] {
+    display: none;
+}
+
+.sentry-player-tools {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.sentry-mode-switch {
+    display: inline-flex;
+    padding: 2px;
+    border-radius: 8px;
+    background: rgba(90, 122, 155, 0.08);
+}
+
+.sentry-mode-switch button {
+    border: 0;
+    background: transparent;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--color-text-light);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.sentry-mode-switch button.active {
+    background: var(--color-card);
+    color: var(--color-text);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.sentry-player-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: rgba(255, 255, 255, 0.32);
+}
+
+.sentry-player-empty i {
+    font-size: 40px;
+}
+
+.sentry-player-empty p {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.sentry-player-empty span {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.24);
+}
+
+.sentry-scanlines {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(255, 255, 255, 0.018) 0 1px,
+        transparent 1px 4px
+    );
+}
+
+.sentry-hud {
+    position: absolute;
+    inset: 0;
+    padding: 14px 16px 38px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 12px;
+    /* 真实画面偏亮时纯白 HUD 会看不清，用上下渐变压一层，中间保持不动 */
+    background: linear-gradient(
+        180deg,
+        rgba(0, 0, 0, 0.55) 0%,
+        rgba(0, 0, 0, 0.12) 16%,
+        rgba(0, 0, 0, 0) 45%,
+        rgba(0, 0, 0, 0.15) 68%,
+        rgba(0, 0, 0, 0.68) 100%
+    );
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+.sentry-hud-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.sentry-hud-channel {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    letter-spacing: 0.5px;
+}
+
+.sentry-rec {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #E07A7A;
+    animation: pulse 1.6s infinite;
+}
+
+.sentry-rec.off {
+    background: #6B6B6B;
+    animation: none;
+}
+
+.sentry-hud-clock {
+    font-family: ui-monospace, Consolas, monospace;
+    letter-spacing: 1px;
+}
+
+.sentry-hud-title {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.sentry-hud-meta {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.45);
+    margin-top: 3px;
+}
+
+.sentry-clip-list {
+    flex: 1;
+    padding: 8px;
+    overflow-y: auto;
+    max-height: 520px;
+}
+
+.sentry-clip {
+    display: flex;
+    gap: 12px;
+    padding: 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.sentry-clip:hover {
+    background: rgba(90, 122, 155, 0.05);
+}
+
+.sentry-clip.active {
+    background: rgba(90, 122, 155, 0.09);
+    border-color: rgba(90, 122, 155, 0.35);
+}
+
+.sentry-clip-thumb {
+    position: relative;
+    width: 76px;
+    height: 52px;
+    border-radius: 6px;
+    background: #0A0C0F;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 16px;
+    overflow: hidden;
+}
+
+.sentry-clip-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.sentry-clip-duration {
+    position: absolute;
+    right: 4px;
+    bottom: 3px;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.6);
+    background: rgba(0, 0, 0, 0.45);
+    padding: 0 4px;
+    border-radius: 3px;
+}
+
+.sentry-clip-info {
+    min-width: 0;
+    flex: 1;
+}
+
+.sentry-clip-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text);
+}
+
+.sentry-clip-sub {
+    font-size: 11px;
+    color: var(--color-text-light);
+    margin-top: 4px;
+}
+
+.sentry-empty {
+    padding: 40px 12px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--color-text-light);
+}
+
+@media (max-width: 1100px) {
+    .sentry-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .sentry-clip-list {
+        max-height: 320px;
+    }
+}
+
+/* ============================================================
+   哨兵模式 - 告警态
+   ============================================================ */
+
+@keyframes sentry-rec-blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0.2; }
+}
+
+@keyframes sentry-alarm-pulse {
+    0%, 100% {
+        box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.35), 0 0 22px rgba(220, 53, 69, 0.14);
+    }
+    50% {
+        box-shadow: 0 0 0 4px rgba(220, 53, 69, 0.62), 0 0 38px rgba(220, 53, 69, 0.32);
+    }
+}
+
+.sentry-player-card.is-alarm {
+    border-color: var(--color-danger);
+    animation: sentry-alarm-pulse 1s ease-in-out 3;
+}
+
+.sentry-player-card.is-alarm .sentry-rec {
+    background: var(--color-danger);
+    box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.25);
+    animation: sentry-rec-blink 0.7s steps(1) infinite;
+}
+
+/* 列表项删除按钮：默认半透明，悬停变红，避免误点 */
+.sentry-clip-del {
+    flex: 0 0 auto;
+    align-self: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 10px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0.4;
+    transition: var(--transition);
+}
+
+.sentry-clip:hover .sentry-clip-del,
+.sentry-clip.active .sentry-clip-del {
+    opacity: 1;
+}
+
+.sentry-clip-del:hover {
+    background: var(--color-danger);
+    border-color: var(--color-danger);
+    color: #fff;
+}
+
+/* 观察态：开关卡片描边转琥珀，和「告警中」的红色区分开 */
+.sentry-control.is-watching {
+    border-color: rgba(186, 117, 23, 0.45);
+}

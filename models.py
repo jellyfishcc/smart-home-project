@@ -171,3 +171,61 @@ class LightingRecord(db.Model):
         max_power_w = 60.0
         power_w = max_power_w * (brightness / 100.0)
         return round(power_w * duration_seconds / 3600.0, 2)
+
+
+class SentryEvent(db.Model):
+    """哨兵事件表 - 记录巡检发现的异常与告警留证
+
+    时间字段统一存**本地时间**：告警时间是取证信息，前端按本地时区解析，
+    与既有表使用的 utcnow 不同，避免页面显示早 8 小时。
+    """
+    __tablename__ = 'sentry_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    event_type = db.Column(db.String(30), nullable=False, comment='类型: intruder/motion/patrol/manual')
+    level = db.Column(db.String(20), default='warning', comment='等级: info/warning/critical')
+    channel = db.Column(db.String(50), default='CAM-01 门口', comment='摄像头通道名')
+    person_count = db.Column(db.Integer, default=0, comment='画面中检测到的人数')
+    person_name = db.Column(db.String(100), comment='识别到的人员姓名')
+    confidence = db.Column(db.Float, comment='人脸比对相似度')
+    snapshot_path = db.Column(db.String(500), comment='主快照相对路径，如 sentry/xxx.jpg')
+    snapshots = db.Column(db.Text, comment='连拍快照相对路径 JSON 数组')
+    detail = db.Column(db.String(500), comment='详细描述')
+    status = db.Column(db.String(20), default='pending', comment='处理状态: pending/acknowledged/false_alarm')
+    repeat_count = db.Column(db.Integer, default=1, comment='冷却期内重复触发次数')
+    duration = db.Column(db.Integer, default=0, comment='留证序列时长(秒)')
+    created_at = db.Column(db.DateTime, default=datetime.now, comment='触发时间(本地时间)')
+    handled_at = db.Column(db.DateTime, comment='处理时间')
+
+    def to_dict(self):
+        import json
+        snaps = []
+        if self.snapshots:
+            try:
+                snaps = json.loads(self.snapshots)
+            except (ValueError, TypeError):
+                snaps = []
+        return {
+            'id': self.id,
+            'event_type': self.event_type,
+            'level': self.level,
+            'channel': self.channel,
+            'person_count': self.person_count,
+            'person_name': self.person_name,
+            'confidence': round(self.confidence, 3) if self.confidence else None,
+            'snapshot_path': self.snapshot_path,
+            'snapshot_url': f'/api/files/{self.snapshot_path}' if self.snapshot_path else None,
+            'snapshots': snaps,
+            'snapshot_urls': [f'/api/files/{p}' for p in snaps],
+            'detail': self.detail,
+            'status': self.status,
+            'repeat_count': self.repeat_count or 1,
+            # 连续轮次：第 1 轮为「活动」，满 SENTRY_ALARM_ROUNDS 轮升级为告警
+            'rounds': self.repeat_count or 1,
+            'duration': self.duration or 0,
+            # 片段列表与告警流共用一套字段，前端无需二次拼装
+            'trigger': self.event_type,
+            'started_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+            'handled_at': self.handled_at.strftime('%Y-%m-%d %H:%M:%S') if self.handled_at else None,
+        }

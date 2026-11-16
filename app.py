@@ -18,6 +18,7 @@ Smart Home System - Main Application Entry Point
 """
 import os
 import sys
+import atexit
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,8 @@ from routes.api import api_bp
 from routes.pages import pages_bp
 from services.device_manager import device_manager
 from services.sensor_simulator import sensor_simulator
+from services.camera_stream import camera_stream
+from services.sentry_service import sentry_service
 from services.object_detection import ObjectDetectionService
 from services.face_recognition_service import FaceRecognitionService
 import config
@@ -80,6 +83,10 @@ face_service = FaceRecognitionService(
 )
 app.config['FACE_SERVICE'] = face_service
 
+# 常驻摄像头采集线程（惰性启动：首次抓帧或哨兵启动时才打开设备）
+app.config['CAMERA_STREAM'] = camera_stream
+atexit.register(camera_stream.stop)
+
 # 配置设备管理器和传感器模拟器
 device_manager.init_app(app)
 device_manager.set_socketio(socketio)
@@ -90,6 +97,14 @@ sensor_simulator.init_app(app)
 sensor_simulator.set_socketio(socketio)
 sensor_simulator.set_device_manager(device_manager)
 sensor_simulator.set_db_logger(lambda temp, hum, fan: _log_temperature(temp, hum, fan))
+
+# 哨兵模式：复用常驻采集流与已加载的人脸服务，检测模型独立（需含 person 类）
+sentry_service.init_app(app)
+sentry_service.set_socketio(socketio)
+sentry_service.set_device_manager(device_manager)
+sentry_service.set_face_service(face_service)
+sentry_service.set_camera_stream(camera_stream)
+atexit.register(sentry_service.shutdown)
 
 
 def _log_device_status(device_name, status, value, source):
@@ -106,7 +121,12 @@ def _log_device_status(device_name, status, value, source):
         db.session.commit()
     except Exception as e:
         logger.error(f'记录设备状态失败: {e}')
-        db.session.rollback()
+        # 回滚本身也可能失败（例如调用方在无应用上下文的线程里），
+        # 不能再让回滚抛异常盖掉原始错误
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
 
 
 def _log_temperature(temp, humidity, fan_activated):
@@ -122,7 +142,10 @@ def _log_temperature(temp, humidity, fan_activated):
         db.session.commit()
     except Exception as e:
         logger.error(f'记录温度失败: {e}')
-        db.session.rollback()
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
 
 
 def _log_lighting(status, brightness, source, recorded_at):
@@ -138,7 +161,10 @@ def _log_lighting(status, brightness, source, recorded_at):
         db.session.commit()
     except Exception as e:
         logger.error(f'记录灯光失败: {e}')
-        db.session.rollback()
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
 
 
 # 注册蓝图
