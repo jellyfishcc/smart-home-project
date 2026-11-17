@@ -15,6 +15,9 @@ def init_db(app):
         db.create_all()
         print('[DB] 数据库表已创建')
 
+        if app.config.get('SERIAL_ENV_ENABLED') or not app.config.get('SIMULATION_MODE', True):
+            return  # Never seed fake telemetry into a real-source database.
+
         # 如果没有数据，插入演示数据
         if AuthorizedPerson.query.count() == 0:
             _seed_authorized_persons()

@@ -28,6 +28,8 @@ class SensorSimulator:
         self._temp_threshold = 30.0
         self._current_temp = 25.0
         self._current_humidity = 55.0
+        self._received_at = None
+        self._reading_valid = False
         self._app = app
 
         if app:
@@ -48,8 +50,14 @@ class SensorSimulator:
     def set_threshold(self, threshold):
         self._temp_threshold = threshold
 
+    def selected_source(self):
+        cfg = self._app.config if self._app else {}
+        return 'hardware' if cfg.get('SERIAL_ENV_ENABLED') else ('simulation' if cfg.get('SIMULATION_MODE', True) else 'unavailable')
+
     def start(self):
         """启动传感器模拟线程"""
+        if self.selected_source() != 'simulation':
+            return
         if self._running:
             return
         self._running = True
@@ -65,7 +73,7 @@ class SensorSimulator:
     def _run(self):
         """模拟传感器数据采集循环"""
         hour = datetime.now().hour
-        while self._running:
+        while self._running and self.selected_source() == 'simulation':
             try:
                 # 模拟温度变化（基于时间）
                 now_hour = datetime.now().hour
@@ -92,6 +100,7 @@ class SensorSimulator:
                 # 推送实时数据
                 if self._socketio:
                     self._socketio.emit('sensor_update', {
+                        'source': 'simulation',
                         'temperature': self._current_temp,
                         'humidity': self._current_humidity,
                         'fan_activated': fan_activated,
@@ -108,7 +117,16 @@ class SensorSimulator:
 
     def get_current_reading(self):
         """获取当前传感器读数"""
+        source = self.selected_source()
+        if source != 'simulation':
+            valid = source == 'hardware' and self._reading_valid and self._received_at is not None and time.time() - self._received_at < 30
+            return {'temperature': self._current_temp if valid else None,
+                    'humidity': self._current_humidity if valid else None,
+                    'fan_activated': self._device_manager.get_device('fan').get('on') if valid and self._device_manager else None,
+                    'source': source, 'available': bool(valid), 'threshold': None,
+                    'timestamp': datetime.fromtimestamp(self._received_at).isoformat() if self._received_at else None}
         return {
+            'source': 'simulation',
             'temperature': self._current_temp,
             'humidity': self._current_humidity,
             'fan_activated': self._current_temp > self._temp_threshold,
@@ -118,23 +136,31 @@ class SensorSimulator:
 
     def set_temperature(self, temp):
         """手动设置温度（用于测试）"""
+        if self.selected_source() != 'simulation':
+            return {'error': 'sensor_source_conflict'}
         self._current_temp = round(float(temp), 1)
 
-    def inject_reading(self, temperature, humidity=None):
+    def inject_reading(self, temperature, humidity=None, source='simulation'):
         """注入真实传感器数据"""
+        if source != self.selected_source():
+            return {'error': 'sensor_source_conflict'}
+        self._received_at = time.time()
+        self._reading_valid = True
         self._current_temp = round(float(temperature), 1)
         if humidity is not None:
             self._current_humidity = round(float(humidity), 1)
 
-        fan_activated = self._current_temp > self._temp_threshold
+        fan_activated = (self._current_temp > self._temp_threshold if source == 'simulation' else
+                         (self._device_manager.get_device('fan').get('on') if self._device_manager else None))
         if self._db_logger:
             self._db_logger(self._current_temp, self._current_humidity, fan_activated)
 
-        if self._device_manager:
+        if self._device_manager and source == 'simulation':
             self._device_manager.auto_fan_control(self._current_temp, self._temp_threshold)
 
         if self._socketio:
             self._socketio.emit('sensor_update', {
+                'source': source,
                 'temperature': self._current_temp,
                 'humidity': self._current_humidity,
                 'fan_activated': fan_activated,

@@ -49,6 +49,15 @@ def _timestamped_upload_filename(prefix, original_filename, forced_stem=None, ti
 # 1. 授权人员管理 API
 # ============================================================
 
+def _person_payload(person):
+    payload = person.to_dict()
+    service = current_app.config.get('FACE_SERVICE')
+    payload['person_status'] = 'person_created'
+    payload['face_registration_status'] = (service.registration_status(person.id)
+        if service and hasattr(service, 'registration_status') else 'face_not_registered')
+    return payload
+
+
 @api_bp.route('/persons', methods=['GET'])
 def get_persons():
     """获取所有授权人员列表"""
@@ -56,7 +65,7 @@ def get_persons():
     return jsonify({
         'code': 0,
         'message': 'success',
-        'data': [p.to_dict() for p in persons],
+        'data': [_person_payload(p) for p in persons],
         'total': len(persons),
     })
 
@@ -65,7 +74,7 @@ def get_persons():
 def get_person(person_id):
     """获取单个授权人员详情"""
     person = AuthorizedPerson.query.get_or_404(person_id)
-    return jsonify({'code': 0, 'message': 'success', 'data': person.to_dict()})
+    return jsonify({'code': 0, 'message': 'success', 'data': _person_payload(person)})
 
 
 @api_bp.route('/persons', methods=['POST'])
@@ -86,7 +95,7 @@ def add_person():
     )
     db.session.add(person)
     db.session.commit()
-    return jsonify({'code': 0, 'message': '添加成功', 'data': person.to_dict()}), 201
+    return jsonify({'code': 0, 'message': '人员已创建，人脸尚未注册', 'data': _person_payload(person)}), 201
 
 
 @api_bp.route('/persons/<int:person_id>', methods=['PUT'])
@@ -100,7 +109,7 @@ def update_person(person_id):
             setattr(person, field, data[field])
 
     db.session.commit()
-    return jsonify({'code': 0, 'message': '更新成功', 'data': person.to_dict()})
+    return jsonify({'code': 0, 'message': '更新成功', 'data': _person_payload(person)})
 
 
 @api_bp.route('/persons/<int:person_id>', methods=['DELETE'])
@@ -149,7 +158,7 @@ def register_face(person_id):
 
     if result['success']:
         person.face_image_path = file_path
-        person.face_encoding_path = os.path.join('data', 'face_embeddings.pkl')
+        person.face_encoding_path = str(face_service.embeddings_path)
         db.session.commit()
 
     return jsonify({
@@ -201,8 +210,12 @@ def _process_access_image(file_path, filename):
 
     # 只有最终判定为 granted 才驱动门锁
     if access_result == 'granted':
-        detail += '，门禁已开启'
-        device_manager.set_device('door', 'unlocked', source='face_recognition')
+        control = device_manager.set_device('door', 'unlocked', source='face_recognition')
+        if control.get('error'):
+            access_result = 'denied'
+            detail += '，硬件命令未完成：' + control['error']
+        else:
+            detail += '，命令已接受；门位置未确认' if control.get('hardware') else '，模拟门禁已开启'
 
     log = AccessLog(
         person_id=person.id if person else None,
@@ -296,8 +309,12 @@ def recognize_face():
 
     # 只有最终判定为 granted 才驱动门锁
     if access_result == 'granted':
-        detail += '，门禁已开启'
-        device_manager.set_device('door', 'unlocked', source='face_recognition')
+        control = device_manager.set_device('door', 'unlocked', source='face_recognition')
+        if control.get('error'):
+            access_result = 'denied'
+            detail += '，硬件命令未完成：' + control['error']
+        else:
+            detail += '，命令已接受；门位置未确认' if control.get('hardware') else '，模拟门禁已开启'
 
     # 记录访问日志
     log = AccessLog(
@@ -421,8 +438,11 @@ def upload_and_detect():
         # 执行触发的动作
         for action in actions:
             if action['action'] == 'turn_on_light':
-                device_manager.set_light_brightness(80, source='auto_detection')
-                action['executed'] = True
+                control = device_manager.set_light_brightness(80, source='auto_detection')
+                action['executed'] = not bool(control.get('error'))
+                action['error'] = control.get('error')
+
+    triggered_action = json.dumps(actions, ensure_ascii=False) if actions else None
 
     # 保存检测记录
     record = DetectionRecord(
@@ -483,8 +503,9 @@ def detect_from_camera():
     if actions:
         for action in actions:
             if action['action'] == 'turn_on_light':
-                device_manager.set_light_brightness(80, source='auto_detection')
-                action['executed'] = True
+                control = device_manager.set_light_brightness(80, source='auto_detection')
+                action['executed'] = not bool(control.get('error'))
+                action['error'] = control.get('error')
 
     triggered_action = json.dumps(actions, ensure_ascii=False) if actions else None
 
@@ -538,6 +559,16 @@ def get_detection_records():
 # 4. 设备控制 API
 # ============================================================
 
+def _control_response(result, message):
+    if result.get('error'):
+        return jsonify({'code': 1, 'message': result['error'], 'data': result}), result.get('http_status', 503)
+    if result.get('hardware'):
+        message = ('控制板已确认开关命令；并非物理传感器测量'
+                   if result.get('device') in ('fan', 'light') else
+                   '控制板已接受命令；实际物理位置未确认')
+    return jsonify({'code': 0, 'message': message, 'data': result})
+
+
 @api_bp.route('/devices', methods=['GET'])
 def get_all_devices():
     """获取所有设备状态"""
@@ -563,20 +594,21 @@ def control_device(device_name):
         return jsonify({'code': 1, 'message': '缺少参数'}), 400
 
     status = data.get('status')
+    if device_name in ('fan', 'light') and status not in ('on', 'off', 'auto'):
+        return jsonify({'code': 1, 'message': 'status 必须为 on/off/auto'}), 400
     value = data.get('value')
-    source = data.get('source', 'remote')
+    source = 'remote'  # A client cannot impersonate hardware events.
 
     result = device_manager.set_device(device_name, status, value, source)
-    return jsonify({'code': 0, 'message': '控制成功', 'data': result})
+    return _control_response(result, '控制成功')
 
 
 @api_bp.route('/devices/<device_name>/toggle', methods=['POST'])
 def toggle_device(device_name):
     """切换设备开关"""
-    data = request.get_json() or {}
-    source = data.get('source', 'remote')
+    source = 'remote'  # A client cannot impersonate hardware events.
     result = device_manager.toggle_device(device_name, source)
-    return jsonify({'code': 0, 'message': '切换成功', 'data': result})
+    return _control_response(result, '切换成功')
 
 
 @api_bp.route('/devices/light/brightness', methods=['POST'])
@@ -587,9 +619,9 @@ def set_light_brightness():
         return jsonify({'code': 1, 'message': '缺少 brightness 参数'}), 400
 
     brightness = int(data['brightness'])
-    source = data.get('source', 'remote')
+    source = 'remote'  # A client cannot impersonate hardware events.
     result = device_manager.set_light_brightness(brightness, source)
-    return jsonify({'code': 0, 'message': '亮度设置成功', 'data': result})
+    return _control_response(result, '亮度设置成功')
 
 
 # ============================================================
@@ -627,7 +659,7 @@ def inject_sensor_data():
         data['temperature'],
         data.get('humidity'),
     )
-    return jsonify({'code': 0, 'message': '数据已注入', 'data': result})
+    return _control_response(result, '数据已注入')
 
 
 # ============================================================

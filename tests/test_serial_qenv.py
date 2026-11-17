@@ -284,7 +284,9 @@ class EnvApplyTest(unittest.TestCase):
 
         service._on_data(Message('DATA', 'ENV', ['250', '500', '0']))
 
-        self.assertEqual(sio.events, [])
+        self.assertEqual(len(sio.events), 1)
+        self.assertIsNone(sio.events[0][1]['temperature'])
+        self.assertFalse(sio.events[0][1]['valid'])
         # 但原始报文还是要留档，方便排查
         self.assertEqual(service.status()['env']['args'], ['250', '500', '0'])
 

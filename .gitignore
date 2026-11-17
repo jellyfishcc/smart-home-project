@@ -29,3 +29,7 @@ venv/
 # 本地缓存（pip/uv/tmp，避免写 C 盘）
 .cache/
 .workbuddy/
+
+# Database-scoped biometric stores and migration backups (local only)
+/data/backups/
+/data/face_embeddings.*.pkl

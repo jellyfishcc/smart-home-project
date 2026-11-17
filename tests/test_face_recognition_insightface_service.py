@@ -99,6 +99,8 @@ class InsightFaceRecognitionServiceTest(unittest.TestCase):
             backend=backend,
         )
 
+        (root / "empty.webp").write_bytes(b"fake image")
+        (root / "group.webp").write_bytes(b"fake image")
         no_face = service.register_face(1, str(root / "empty.webp"), "张明")
         multi_face = service.register_face(1, str(root / "group.webp"), "张明")
 

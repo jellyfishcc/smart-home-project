@@ -43,7 +43,7 @@ async function loadDashboard() {
 // 更新传感器显示
 function updateSensorDisplay(sensor) {
     if (!sensor) return;
-    document.getElementById('tempValue').textContent = sensor.temperature + '°C';
+    document.getElementById('tempValue').textContent = sensor.temperature == null ? '未上报' : sensor.temperature + '°C';
 
     const trend = document.getElementById('tempTrend');
     if (sensor.temperature > sensor.threshold) {
@@ -86,8 +86,8 @@ function updateDeviceDisplay(device, state) {
         document.getElementById('lightValue').textContent = state.brightness + '%';
         document.getElementById('lightStatus').textContent = state.on ? '开启' : '关闭';
     } else if (device === 'door') {
-        document.getElementById('doorValue').textContent = state.locked ? '锁定' : '已开锁';
-        document.getElementById('doorStatus').textContent = state.locked ? '安全锁定' : '已开锁';
+        document.getElementById('doorValue').textContent = state.locked == null ? '位置未知' : (state.locked ? '锁定' : '已开锁');
+        document.getElementById('doorStatus').textContent = state.locked == null ? (state.command_state || '未确认') : (state.locked ? '安全锁定' : '已开锁');
     } else if (device === 'window') {
         document.getElementById('windowValue').textContent = state.closed ? '关闭' : '打开';
         document.getElementById('windowStatus').textContent = state.closed ? '已关闭' : '已打开';

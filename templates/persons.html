@@ -172,9 +172,11 @@ async function loadPersons() {
                 } else {
                     statusBadge = '<span class="badge badge-warning">未授权</span>';
                 }
-                const faceBadge = p.face_image_path
+                const faceBadge = p.face_registration_status === 'face_registered'
                     ? '<span class="badge badge-success">已注册</span>'
-                    : '<span class="badge badge-secondary">未注册</span>';
+                    : (p.face_registration_status === 'face_registration_failed'
+                        ? '<span class="badge badge-danger">注册失败，请重新录入</span>'
+                        : '<span class="badge badge-secondary">未完成人脸注册</span>');
                 return `<tr>
                     <td>${p.id}</td>
                     <td><strong>${escapeHtml(p.name)}</strong></td>
@@ -264,7 +266,7 @@ async function savePerson() {
             showToast('更新成功', 'success');
         } else {
             await API.post('/api/persons', data);
-            showToast('添加成功', 'success');
+            showToast('人员已创建，请继续完成人脸注册', 'info');
         }
         closeModal();
         loadPersons();
@@ -325,6 +327,7 @@ async function handleFaceReg(file) {
             showToast('人脸注册成功', 'success');
             loadPersons();
         } else {
+            loadPersons();
             resultDiv.innerHTML = `<div class="alert alert-danger">
                 <i class="bi bi-x-circle-fill"></i> ${res.message}
             </div>`;

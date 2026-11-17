@@ -4,6 +4,9 @@ Smart home face recognition service backed by InsightFace embeddings.
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
+import threading
 import pickle
 import shutil
 from datetime import datetime
@@ -32,11 +35,25 @@ class FaceRecognitionService:
         model_name='buffalo_l',
         model_root=None,
         det_size=(320, 320),
+        database_uri=None,
+        person_lookup=None,
     ):
         self.known_faces_dir = Path(known_faces_dir)
         self.data_dir = Path(data_dir)
         self.confidence_threshold = float(confidence_threshold)
         self.embeddings_path = Path(embeddings_path) if embeddings_path else self.data_dir / 'face_embeddings.pkl'
+        self.database_identity = None
+        self.person_lookup = person_lookup
+        self._gallery_lock = threading.RLock()
+        self.registration_failures = {}
+        self._match_error = None
+        self._gallery_rejected = False
+        if database_uri is not None:
+            from services.face_gallery_scope import gallery_scope
+            self.database_identity, self.embeddings_path = gallery_scope(database_uri)
+            if person_lookup is None:
+                raise ValueError('Scoped gallery requires a current-database person lookup')
+
         model_root = Path(model_root) if model_root is not None else PROJECT_ROOT / 'models'
         self.backend = backend or InsightFaceBackend(
             model_name=model_name,
@@ -62,15 +79,23 @@ class FaceRecognitionService:
             with path.open('rb') as f:
                 payload = pickle.load(f)
         except Exception as exc:
+            self._gallery_rejected = self.database_identity is not None
             logger.warning('[FaceRec] Failed to load embedding store: %s', exc)
             return []
 
+        if self.database_identity is not None:
+            if not isinstance(payload, dict) or payload.get('database_identity') != self.database_identity:
+                self._gallery_rejected = True
+                logger.warning('[FaceRec] gallery database identity mismatch; refusing records')
+                return []
+            self.registration_failures = payload.get('registration_failures', {})
         records = payload.get('records', []) if isinstance(payload, dict) else payload
         loaded = []
         for record in records:
             try:
                 loaded.append({
                     'person_id': int(record['person_id']),
+                    'person_token': record.get('person_token'),
                     'person_name': record.get('person_name'),
                     'embedding': self._normalize(record['embedding']),
                     'sample_path': record.get('sample_path'),
@@ -82,9 +107,40 @@ class FaceRecognitionService:
 
     def _save_embeddings(self):
         self._embedding_path().parent.mkdir(parents=True, exist_ok=True)
-        with self._embedding_path().open('wb') as f:
-            pickle.dump({'records': self.records}, f)
+        payload = {'records': self.records, 'database_identity': self.database_identity,
+                   'registration_failures': self.registration_failures}
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self._embedding_path().parent, delete=False) as f:
+                temp_path = f.name
+                pickle.dump(payload, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self._embedding_path())
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
         self.is_trained = len(self.records) > 0
+
+    def _valid_records(self, require_registered=True):
+        if self.database_identity is None:
+            return list(self.records)  # Standalone/offline compatibility only.
+        valid = []
+        for record in self.records:
+            person = self.person_lookup(record['person_id'])
+            if person and person['token'] == record.get('person_token') and (person['registered'] or not require_registered):
+                valid.append(record)
+            else:
+                logger.warning('[FaceRec] stale/orphan person binding excluded: id=%s', record['person_id'])
+        return valid
+
+    def registration_status(self, person_id):
+        with self._gallery_lock:
+            if any(r['person_id'] == person_id for r in self._valid_records()):
+                return 'face_registered'
+            if str(person_id) in self.registration_failures:
+                return 'face_registration_failed'
+            return 'face_not_registered'
 
     def _normalize(self, embedding):
         vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
@@ -94,18 +150,22 @@ class FaceRecognitionService:
         return vector / norm
 
     def _best_match(self, probe_embedding):
-        if not self.records:
-            return None, None
-
-        probe = self._normalize(probe_embedding)
-        best_record = None
-        best_similarity = None
-        for record in self.records:
-            similarity = float(np.dot(probe, record['embedding']))
-            if best_similarity is None or similarity > best_similarity:
-                best_record = record
-                best_similarity = similarity
-        return best_record, best_similarity
+        with self._gallery_lock:
+            self._match_error = None
+            probe = self._normalize(probe_embedding)
+            candidates = [(float(np.dot(probe, r['embedding'])), r) for r in self._valid_records()]
+            if not candidates:
+                return None, None
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            score, best = candidates[0]
+            for other_score, other in candidates[1:]:
+                if other['person_id'] != best['person_id'] and (
+                    float(np.dot(best['embedding'], other['embedding'])) >= 0.9999 or
+                    (score >= self.confidence_threshold and abs(score - other_score) <= 1e-6)):
+                    logger.warning('[FaceRec] ambiguous/duplicate identities: %s and %s', best['person_id'], other['person_id'])
+                    self._match_error = '人脸库存在重复或同分身份冲突，拒绝自动确认人员'
+                    return None, None
+            return best, score
 
     def detect_faces(self, image):
         """Compatibility wrapper for older callers that expected Haar boxes."""
@@ -126,6 +186,30 @@ class FaceRecognitionService:
         return np.asarray(boxes, dtype=np.int32), None
 
     def register_face(self, person_id, image_path, person_name=None):
+        with self._gallery_lock:
+            before = list(self.records)
+            try:
+                if self._gallery_rejected:
+                    raise ValueError('gallery 数据库标识不匹配，必须先处理完整性问题')
+                if self.database_identity is not None and self.person_lookup(person_id) is None:
+                    raise ValueError('当前数据库不存在此人员，或数据库配置已切换')
+                if not Path(image_path).is_file():
+                    raise ValueError('注册照片不存在')
+                result = self._register_face(person_id, image_path, person_name)
+                if result['success']:
+                    self.registration_failures.pop(str(person_id), None)
+                else:
+                    self.registration_failures[str(person_id)] = result['message']
+                self._save_embeddings()
+            except Exception as exc:
+                self.records = before
+                self.is_trained = bool(before)
+                result = {'success': False, 'message': '人脸注册失败，需要重新录入：' + str(exc), 'face_count': 0}
+                self.registration_failures[str(person_id)] = result['message']
+            result['registration_status'] = 'face_registered' if result['success'] else 'face_registration_failed'
+            return result
+
+    def _register_face(self, person_id, image_path, person_name=None):
         """
         Register one face embedding for a person.
         Returns: {'success': bool, 'message': str, 'face_count': int}
@@ -155,15 +239,20 @@ class FaceRecognitionService:
             }
 
         embedding = self._normalize(faces[0].embedding)
+        for record in self._valid_records(require_registered=False):
+            if record['person_id'] != int(person_id) and float(np.dot(embedding, record['embedding'])) >= 0.9999:
+                logger.warning('[FaceRec] duplicate registration conflicts with id=%s', record['person_id'])
+                return {'success': False, 'message': '人脸与另一人员重复，请先处理身份冲突', 'face_count': 1}
+
         sample_path = self._copy_sample_image(person_id, image_path)
         self.records.append({
             'person_id': int(person_id),
+            'person_token': self.person_lookup(person_id)['token'] if self.database_identity else None,
             'person_name': person_name,
             'embedding': embedding,
             'sample_path': sample_path,
             'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         })
-        self._save_embeddings()
 
         return {
             'success': True,
@@ -178,7 +267,7 @@ class FaceRecognitionService:
 
         source = Path(image_path)
         suffix = source.suffix.lower() or '.jpg'
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         sample_path = person_dir / f'{timestamp}{suffix}'
         shutil.copy2(source, sample_path)
         return str(sample_path)
@@ -244,7 +333,7 @@ class FaceRecognitionService:
                 'confidence': None,
                 'faces_detected': 1,
                 'result': 'unknown',
-                'detail': '人脸模型未训练，请先注册人脸',
+                'detail': self._match_error or '当前数据库没有合法人脸注册记录，请完成人脸注册',
             }
 
         confidence = round(float(similarity), 4)
@@ -324,14 +413,18 @@ class FaceRecognitionService:
 
     def get_registered_persons(self):
         """Return registered person IDs."""
-        return sorted({record['person_id'] for record in self.records})
+        return sorted({record['person_id'] for record in self._valid_records()})
 
     def remove_person(self, person_id):
-        """Delete one person's face samples and embeddings."""
-        person_id = int(person_id)
-        person_dir = self.known_faces_dir / f'person_{person_id}'
-        if person_dir.exists():
-            shutil.rmtree(person_dir)
-        self.records = [record for record in self.records if record['person_id'] != person_id]
-        self._save_embeddings()
-        return True
+        """Remove current-gallery identity; preserve original photos for audit."""
+        with self._gallery_lock:
+            if self.database_identity and self.person_lookup(person_id) is None:
+                raise ValueError('人员不属于当前数据库或数据库已切换')
+            before = self.records
+            self.records = [r for r in self.records if r['person_id'] != int(person_id)]
+            try:
+                self._save_embeddings()
+            except Exception:
+                self.records = before
+                raise
+            return True

@@ -1,31 +1,24 @@
-"""
-串口通信层调试工具
+"""串口通信层调试工具。
 
-不启动 Flask，只验证「Python 这边的串口层」是否正常工作。三种用法：
-
-  1) 看本机有哪些串口，以及自动探测会挑哪个
-       python scripts/serial_probe.py --list
-
-  2) 监听一段时间，把收到的每一行按协议解析后打印
-       python scripts/serial_probe.py --port COM3 --listen 20
-
-  3) 发命令并打回执（会先等板子复位完）
-       python scripts/serial_probe.py --port COM3 --send OPEN --send QRAIN
-
-端口留空则自动探测。加 --raw 可以把原始字节一起打出来，排查乱码时用。
+只读枚举：python scripts/serial_probe.py --list
+连接时必须显式传 --usb-serial；按 USB 身份解析端口，不按 tty 编号猜角色。
+--listen 和 --send 都会打开串口并可能复位板卡，只在授权联调时使用。
 """
 import argparse
+import math
 import os
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config  # read configuration only; does not start the application
+
 from services.serial_bridge import (  # noqa: E402
     PYSERIAL_AVAILABLE,
     SerialBridge,
-    autodetect_port,
     list_serial_ports,
+    decode_env,
 )
 
 
@@ -37,18 +30,22 @@ def cmd_list():
     if not ports:
         print('没有发现任何串口。检查 USB 线是否插好、驱动是否装好。')
         return 1
-    print('%-14s %-6s %s' % ('设备', '评分', '描述'))
+    print('%-14s %-26s %s' % ('设备', 'USB Serial Number', '描述'))
     print('-' * 60)
     for p in ports:
-        print('%-14s %-6d %s' % (p['device'], p['score'], p['description']))
+        print('%-14s %-26s %s' % (p['device'], p.get('serial_number') or 'unknown', p['description']))
     print('-' * 60)
-    best = autodetect_port()
-    print('自动探测结果: %s' % (best or '（没有匹配到 Arduino 类设备）'))
     return 0
 
 
 def build_bridge(args):
-    bridge = SerialBridge(port=args.port, baudrate=args.baud,
+    identity = (args.usb_serial or '').strip()
+    if not identity:
+        raise ValueError('usb_serial_mapping_required: 请显式传 --usb-serial')
+    env_query = any(s.split() and s.split()[0].upper() == 'QENV' for s in getattr(args, 'send', []))
+    boot_wait = config.SERIAL_ENV_BOOT_WAIT if env_query else config.SERIAL_BOOT_WAIT
+    bridge = SerialBridge(port=args.port, usb_serial=identity, baudrate=args.baud,
+                          boot_wait=boot_wait,
                           heartbeat_interval=0, rain_poll_interval=0)
 
     def on_event(msg):
@@ -73,8 +70,11 @@ def _raw(msg, args):
 def main():
     parser = argparse.ArgumentParser(description='串口通信层调试工具')
     parser.add_argument('--list', action='store_true', help='列出串口后退出')
-    parser.add_argument('--port', default='', help='串口名，如 COM3 或 /dev/ttyUSB0；留空自动探测')
+    parser.add_argument('--port', default='', help='兼容端口参数；Linux 按 USB Serial Number 解析，不据此猜身份')
+    parser.add_argument('--usb-serial', default='', help='目标板 USB Serial Number（连接必填）')
     parser.add_argument('--baud', type=int, default=9600, help='波特率，默认 9600')
+    parser.add_argument('--post-boot-wait', type=float, default=0,
+                        help='诊断用：ready 后、发送命令前额外等待秒数（默认 0）')
     parser.add_argument('--listen', type=float, default=0, help='监听秒数')
     parser.add_argument('--send', action='append', default=[], help='发送命令，可重复')
     parser.add_argument('--raw', action='store_true', help='同时打印原始行')
@@ -82,6 +82,12 @@ def main():
 
     if args.list:
         return cmd_list()
+
+    if not math.isfinite(args.post_boot_wait) or args.post_boot_wait < 0:
+        parser.error('--post-boot-wait 必须是有限的非负秒数')
+
+    if not args.usb_serial.strip():
+        parser.error('usb_serial_mapping_required: 请显式传 --usb-serial')
 
     if not PYSERIAL_AVAILABLE:
         print('pyserial 未安装，先执行：pip install pyserial')
@@ -92,9 +98,15 @@ def main():
         return 1
 
     try:
-        # 打开串口会复位板子，先等启动横幅
-        print('等待板子复位（约 2.5s）...')
-        time.sleep(2.5)
+        print('命令将在实际串口打开并完成 boot readiness 后发送。')
+
+        if args.send and args.post_boot_wait > 0:
+            # Diagnostic-only wait: reuse transport readiness without sending.
+            if bridge._wait_boot() is None:
+                print('transport/boot readiness 未完成，不发送命令。')
+                return 1
+            print('诊断等待 %.2fs（ready 之后）...' % args.post_boot_wait)
+            time.sleep(args.post_boot_wait)
 
         for text in args.send:
             parts = text.split()
@@ -104,16 +116,12 @@ def main():
             if result.ok:
                 print('<<< 成功 (%d 次尝试, %.0fms) 回执=%s'
                       % (result.attempts, result.elapsed * 1000, result.reply))
+                if name.upper() == 'QENV' and result.reply:
+                    reading = decode_env(result.reply.args)
+                    print('ENV reading:', reading if reading is not None else 'invalid (DHT 未就绪)')
             else:
                 print('<<< 失败: %s (%d 次尝试, %.0fms)'
                       % (result.error, result.attempts, result.elapsed * 1000))
-
-        # 额外演示两个便捷方法
-        if 'QRAIN' in [s.split()[0].upper() for s in args.send if s.strip()]:
-            print('query_rain() ->', bridge.query_rain())
-
-        if 'QENV' in [s.split()[0].upper() for s in args.send if s.strip()]:
-            print('query_env() ->', bridge.query_env())
 
         if args.listen > 0:
             print('\n监听 %.0fs，Ctrl+C 提前结束...' % args.listen)

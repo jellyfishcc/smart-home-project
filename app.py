@@ -74,12 +74,17 @@ detection_service = ObjectDetectionService(
 )
 app.config['DETECTION_SERVICE'] = detection_service
 
+from services.face_gallery_scope import gallery_scope, person_lookup
+face_database_identity, face_gallery_path = gallery_scope(app.config['SQLALCHEMY_DATABASE_URI'])
+app.config['FACE_EMBEDDINGS_PATH'] = face_gallery_path
 logger.info('正在初始化人脸识别服务...')
 face_service = FaceRecognitionService(
     known_faces_dir=config.KNOWN_FACES_FOLDER,
     data_dir=config.DATA_DIR,
     confidence_threshold=config.FACE_MATCH_THRESHOLD,
-    embeddings_path=config.FACE_EMBEDDINGS_PATH,
+    embeddings_path=face_gallery_path,
+    database_uri=app.config['SQLALCHEMY_DATABASE_URI'],
+    person_lookup=person_lookup(app, face_database_identity),
     model_name=config.INSIGHTFACE_MODEL_NAME,
     model_root=config.INSIGHTFACE_MODEL_ROOT,
     det_size=config.INSIGHTFACE_DET_SIZE,
@@ -110,21 +115,18 @@ sentry_service.set_camera_stream(camera_stream)
 atexit.register(sentry_service.shutdown)
 
 # 硬件对接：门禁板看 SMART_HOME_SERIAL_ENABLED，环境板看 SMART_HOME_SERIAL_ENV_ENABLED。
-# 两块板各占一条串口，任一启用就启动本层；启动失败（没插板、没装驱动）只告警，
-# 不影响其余功能，行为与纯软件模式一致。
+# 两块板按各自 USB 身份连接；启动失败保留硬件控制入口并返回明确错误。
 hardware_service.init_app(app)
 hardware_service.set_socketio(socketio)
 hardware_service.set_device_manager(device_manager)
 atexit.register(hardware_service.shutdown)
 
-if config.SERIAL_ENABLED or config.SERIAL_ENV_ENABLED:
-    if hardware_service.start():
-        # 只有真正起来了才挂出站钩子；否则 set_device 完全不碰硬件
-        device_manager.set_hardware_bridge(hardware_service)
-    else:
-        logger.warning('硬件串口启动失败，继续以纯软件模式运行')
-else:
-    logger.info('硬件串口未启用（SMART_HOME_SERIAL_ENABLED / SMART_HOME_SERIAL_ENV_ENABLED 都为 0）')
+# Always retain the hardware hook when requested, even if initialization fails.
+if config.SERIAL_ENABLED or config.SERIAL_ENV_ENABLED or not config.SIMULATION_MODE:
+    device_manager.set_hardware_bridge(hardware_service)
+    if not hardware_service.start():
+        logger.warning('硬件不可用；命令明确失败，不回退为模拟成功')
+
 
 
 def _log_device_status(device_name, status, value, source):
@@ -213,7 +215,7 @@ def handle_request_status():
 
 
 # 启动传感器模拟器
-if config.SIMULATION_MODE:
+if config.SENSOR_SOURCE == 'simulation':
     sensor_simulator.start()
     logger.info('传感器模拟器已启动 (模拟模式)')
 
@@ -222,6 +224,7 @@ if config.SIMULATION_MODE:
 def inject_globals():
     """注入全局模板变量"""
     return {
+        'sensor_source': config.SENSOR_SOURCE,
         'app_title': '智能家居管理系统',
         'yolo_available': detection_service.available,
         'face_trained': face_service.is_trained,
@@ -234,7 +237,7 @@ if __name__ == '__main__':
     logger.info(f'  YOLO 检测: {"可用" if detection_service.available else "降级模式"}')
     logger.info(f'  人脸 Embedding: 已加载 {len(face_service.records)} 条' if face_service.is_trained else '  人脸 Embedding: 未注册')
     logger.info(f'  摄像头来源: {config.CAMERA_SOURCE}')
-    logger.info(f'  传感器模式: {"模拟" if config.SIMULATION_MODE else "真实"}')
+    logger.info('  传感器数据源: %s', config.SENSOR_SOURCE)
     _hw = hardware_service.status()
     logger.info('  硬件串口: %s', (_hw['door_bridge'] or {}).get('port', '已启用') if _hw['running'] else '未启用')
     logger.info('  环境板串口: %s', ((_hw.get('env_bridge') or {}).get('port') or '未启用'))

@@ -85,19 +85,21 @@ SOCKETIO_ASYNC_MODE = 'eventlet'
 SECRET_KEY = 'smart-home-secret-key-2026'
 
 # 模拟模式（无硬件时使用）
-SIMULATION_MODE = True
+SIMULATION_MODE = os.environ.get('SMART_HOME_SIMULATION_MODE', 'true').lower() not in ('0', 'false', 'no')
+DOOR_USB_SERIAL = os.environ.get('SMART_HOME_DOOR_USB_SERIAL', '')
+ENVIRONMENT_USB_SERIAL = os.environ.get('SMART_HOME_ENVIRONMENT_USB_SERIAL', '')
 
 # ---------------- 硬件串口（Arduino 门禁板 / 环境板） ----------------
 # 通信层实现在 services/serial_bridge.py，只做信息交换，不含业务判断。
 # 默认关闭：不设 SMART_HOME_SERIAL_ENABLED=1 时行为与之前完全一致。
 # 打开后若找不到串口，仅打警告并自动重连，不会影响其它功能。
 SERIAL_ENABLED = os.environ.get('SMART_HOME_SERIAL_ENABLED', '0') in ('1', 'true', 'True')
-# 端口留空 = 自动探测（按 VID / 描述匹配 CH340、Arduino、CP210x 等）
+# Linux 必须按 USB Serial Number 解析；端口字段仅保留 Windows 显式端口兼容。
 SERIAL_PORT = os.environ.get('SMART_HOME_SERIAL_PORT', '')
 SERIAL_BAUD = int(os.environ.get('SMART_HOME_SERIAL_BAUD', '9600'))
 # 单条命令等回执的超时（秒）。9600bps 下 20 字节约 21ms，300ms 留了 10 倍余量
 SERIAL_CMD_TIMEOUT = float(os.environ.get('SMART_HOME_SERIAL_TIMEOUT', '0.3'))
-# 超时重试次数。协议里的命令都是幂等的，重发安全
+# 查询/幂等命令重试次数；OPEN 在 SerialBridge.send 内强制零重试。
 SERIAL_CMD_RETRIES = max(0, int(os.environ.get('SMART_HOME_SERIAL_RETRIES', '2')))
 # 开串口会因 DTR 复位板子，这段是等待启动横幅的时间
 SERIAL_BOOT_WAIT = float(os.environ.get('SMART_HOME_SERIAL_BOOT_WAIT', '2.5'))
@@ -109,14 +111,13 @@ SERIAL_OFFLINE_TIMEOUT = float(os.environ.get('SMART_HOME_SERIAL_OFFLINE', '10')
 SERIAL_RAIN_POLL_INTERVAL = float(os.environ.get('SMART_HOME_SERIAL_RAIN_POLL', '30'))
 # 断开后重连间隔（秒）
 SERIAL_RECONNECT_DELAY = float(os.environ.get('SMART_HOME_SERIAL_RECONNECT', '2'))
-# 兜底回锁：固件 OPEN_DURATION=5000ms，多给 1 秒。
-# 正常情况板子会主动上报「自动关门」，这个计时器只在丢包时生效
+# 固件 OPEN_DURATION=5000ms，多给 1 秒后标记自动关门未确认。
+# 定时器和固件动作事件都不是门位置传感器证据。
 SERIAL_DOOR_AUTO_CLOSE = float(os.environ.get('SMART_HOME_SERIAL_AUTO_CLOSE', '6'))
 
 # ---------------- 环境板（UNO I） ----------------
 # 回传契约：板子收到 `QENV\n` 后回 `@DATA ENV <温度×10> <湿度×10> <DHT有效标志>`。
-# 端口必须显式指定，留空则不启动环境板实例：自动探测会优先抢到门禁板那条口，
-# 两块板共用一个 COM 会互相踩（打开串口还会因 DTR 把对方复位）。
+# 环境板必须配置独立 USB Serial Number；不存在或歧义时不猜测角色。
 SERIAL_ENV_ENABLED = os.environ.get('SMART_HOME_SERIAL_ENV_ENABLED', '0') in ('1', 'true', 'True')
 SERIAL_ENV_PORT = os.environ.get('SMART_HOME_SERIAL_ENV_PORT', '')
 # 温湿度轮询间隔（秒）。DHT11 本身两次采样要隔 ≥2s，10s 足够且不会刷屏
@@ -133,3 +134,13 @@ DEFAULT_DEVICE_STATES = {
     'window': {'closed': True},
     'ac': {'on': False, 'temp': 26},
 }
+
+# A real environment source always wins over the demo switch, including offline periods.
+SENSOR_SOURCE = 'hardware' if SERIAL_ENV_ENABLED else ('simulation' if SIMULATION_MODE else 'unavailable')
+# Separate history databases prevent previous simulation rows contaminating real telemetry.
+if SENSOR_SOURCE == 'hardware':
+    SQLALCHEMY_DATABASE_URI = f"sqlite:///{(BASE_DIR / 'data' / 'smart_home_hardware.db').as_posix()}"
+
+# Face gallery follows the selected database, never the simulation flag alone.
+from services.face_gallery_scope import gallery_scope
+FACE_EMBEDDINGS_PATH = gallery_scope(SQLALCHEMY_DATABASE_URI)[1]

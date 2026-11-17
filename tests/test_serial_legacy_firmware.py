@@ -90,7 +90,7 @@ class LegacyFirmwareTest(unittest.TestCase):
 
         self.assertTrue(bridge._boot_seen)
         self.assertEqual(bridge.status()['protocol'], 'legacy')
-        self.assertEqual(bridge.reported['door'], 'CLOSED')   # 复位即关门
+        self.assertEqual(bridge.reported['physical_position'], 'unknown')   # 复位即关门
 
     def test_open_and_rain_work_over_plain_text(self):
         board = LegacyBoard()
@@ -238,7 +238,7 @@ class EndToEndTest(unittest.TestCase):
 
         self.assertEqual(self.board.written, ['OPEN'])   # 真的发到串口了
         self.assertTrue(result['hardware']['ok'], result['hardware'])
-        self.assertFalse(self.dm.get_device('door')['locked'])
+        self.assertIsNone(self.dm.get_device('door')['locked'])
 
     def test_keypad_unlock_syncs_back_without_echo(self):
         self.assertTrue(self._wait_boot())
@@ -247,7 +247,7 @@ class EndToEndTest(unittest.TestCase):
         self.board.out.put('密码正确\r\n'.encode('utf-8'))
         time.sleep(0.35)
 
-        self.assertFalse(self.dm.get_device('door')['locked'])
+        self.assertIsNone(self.dm.get_device('door')['locked'])
         self.assertEqual(self.board.written, [])
 
     def test_heartbeat_does_not_break_open(self):
