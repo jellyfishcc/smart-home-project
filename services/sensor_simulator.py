@@ -23,7 +23,9 @@ class SensorSimulator:
         self._socketio = None
         self._db_logger = None
         self._device_manager = None
-        self._temp_threshold = 28.0
+        # 和 UNO I 固件的 FAN_ON_TEMP(30) 对齐。两边不一致时，28~30℃ 这段
+        # 会出现「页面显示风扇开、板子自己判断没到 30 所以不转」的矛盾
+        self._temp_threshold = 30.0
         self._current_temp = 25.0
         self._current_humidity = 55.0
         self._app = app

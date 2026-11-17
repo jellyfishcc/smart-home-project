@@ -125,6 +125,210 @@ uint8_t cmdLen=0;
 bool dhtOk=false;
 
 
+//================ 手动控制 FAN / LAMP（新增） ================
+//
+// 板子默认仍然自治：温度 >= 30 开风扇，天黑开灯。
+//
+// 控制权规则（固件与上位机约定）：
+//   软件让设备「开」 -> 板子交出控制权并一直保持，controlFan/controlLamp 不再插手；
+//   软件让设备「关」 -> 板子关掉后立刻交还自治，下一轮 loop 就按传感器重新判断。
+//
+// 为什么开的时候必须彻底锁住：
+//   controlFan() 每个 loop 都会重写 FAN_PIN（30 开 / 28 关），controlLamp()
+//   在天色翻转时也会重写灯带。不锁的话，手动指令活不过一轮 loop。
+// 为什么关的时候必须立刻交还：
+//   关掉之后设备不再影响传感器，自治判断重新变得可信（尤其灯：亮着时会把
+//   自己的光敏照亮，只有在灯关掉之后，光敏读数才代表真实环境）。
+//
+// 协议：
+//   FAN 1 / FAN 0           -> @ACK FAN <1|0>
+//   LAMP 1 60 / LAMP 0      -> @ACK LAMP <1|0> <亮度 0~100>
+//   LAMP AUTO               -> @ACK LAMP AUTO          （显式交还）
+//   交还或自治改了状态      -> @EVT CTL AUTO <FAN|LAMP> / @EVT FAN ON|OFF / @EVT LAMP ON|OFF <亮度>
+
+// 手动接管标志：true = 这个执行器归上位机管，自治逻辑不要动它
+bool fanManual=false;
+bool lampManual=false;
+
+// 交还瞬间屏蔽「变暗 -> 自动开灯」的时长。
+// 灯刚被手动关掉时，光敏会因为灯灭了而由亮转暗，这不是环境变化，
+// 不挡住的话灯会在几十毫秒后自己又亮起来，表现为「关不掉」。
+#define LAMP_SETTLE_MS 2000UL
+
+unsigned long lampSettleUntil=0;
+
+bool lampOn=false;
+
+// 30 和原来 setup() 里的 strip.setBrightness(30) 对齐，手动开灯不会突然变亮
+uint8_t lampLevel=30;
+
+// 前端 0~100 映射到 NeoPixel 的 0~255 时封顶 100（约 39%）。
+// 8 颗 WS2812 全白理论约 480mA，再叠上风扇会顶到 UNO 的 USB 500mA 自恢复保险丝
+#define LED_LEVEL_MAX 100
+
+// 已经通过 @ACK / @EVT 告诉过上位机的状态，用来判断还要不要补一条 @EVT
+bool reportedFan=false;
+bool reportedLamp=false;
+uint8_t reportedLevel=30;
+
+
+void applyFan(bool on)
+{
+  fanState=on;
+
+  // 风扇模块是低电平触发：LOW 转，HIGH 停
+  digitalWrite(FAN_PIN,on?LOW:HIGH);
+}
+
+
+void applyLamp(bool on,int level)
+{
+  // 先夹取再落到 uint8_t：直接 (uint8_t)300 会被截成 44
+  if(level>100)
+  {
+    level=100;
+  }
+
+  if(level<0)
+  {
+    level=0;
+  }
+
+  lampOn=on;
+
+  if(on&&level>0)
+  {
+    lampLevel=(uint8_t)level;
+  }
+
+  uint8_t b=0;
+
+  if(lampOn)
+  {
+    b=(uint8_t)((uint16_t)lampLevel*LED_LEVEL_MAX/100);
+  }
+
+  strip.setBrightness(b);
+
+  if(lampOn)
+  {
+    for(uint8_t i=0;i<LED_NUM;i++)
+    {
+      strip.setPixelColor(i,strip.Color(255,180,50));
+    }
+  }
+  else
+  {
+    strip.clear();
+  }
+
+  strip.show();
+}
+
+
+// 显式交还灯：收到 LAMP AUTO 才走这里，按当前光态重算一次。
+// 平时不用它——软件发 LAMP 0 时灯变 OFF 已经等于交还了。
+void releaseLamp()
+{
+  if(!lampManual)
+  {
+    return;
+  }
+
+  lampManual=false;
+
+  applyLamp(darkState,lampLevel);
+
+  oldDarkState=darkState;
+
+  Serial.println(F("@EVT CTL AUTO LAMP"));
+}
+
+
+// 状态变了就补报一行，页面才不会和板子各说各话
+void reportStates()
+{
+  if(fanState!=reportedFan)
+  {
+    reportedFan=fanState;
+
+    Serial.print(F("@EVT FAN "));
+
+    if(fanState)
+    {
+      Serial.println(F("ON"));
+    }
+    else
+    {
+      Serial.println(F("OFF"));
+    }
+  }
+
+
+  if(lampOn!=reportedLamp||(lampOn&&lampLevel!=reportedLevel))
+  {
+    reportedLamp=lampOn;
+
+    reportedLevel=lampLevel;
+
+    Serial.print(F("@EVT LAMP "));
+
+    if(lampOn)
+    {
+      Serial.print(F("ON "));
+    }
+    else
+    {
+      Serial.print(F("OFF "));
+    }
+
+    Serial.println(lampOn?lampLevel:0);
+  }
+}
+
+
+// 命令执行完先同步一次「已上报」，免得紧跟着再发一条一模一样的 @EVT
+void syncReported()
+{
+  reportedFan=fanState;
+
+  reportedLamp=lampOn;
+
+  reportedLevel=lampLevel;
+}
+
+
+// 取命令里第 idx 个空格分隔参数（从 1 开始），没有就返回 def
+int cmdArg(const char* cmd,uint8_t idx,int def)
+{
+  uint8_t n=0;
+
+  while(*cmd&&n<idx)
+  {
+    if(*cmd==' ')
+    {
+      n++;
+
+      if(n==idx)
+      {
+        cmd++;
+
+        break;
+      }
+    }
+
+    cmd++;
+  }
+
+  if(n<idx||*cmd=='\0')
+  {
+    return def;
+  }
+
+  return atoi(cmd);
+}
+
+
 // 把缓存值按协议回给上位机（整数、放大 10 倍，避免 AVR 上打印浮点）
 void replyEnv()
 {
@@ -175,6 +379,87 @@ void handleCmd(const char* cmd)
     Serial.print(F("@PONG "));
 
     Serial.println(millis());
+  }
+
+  else if(!strncmp(cmd,"FAN",3)&&(cmd[3]=='\0'||cmd[3]==' '))
+  {
+    int on=cmdArg(cmd,1,-1);
+
+    if(on<0||on>1)
+    {
+      Serial.println(F("@NAK FAN"));
+
+      return;
+    }
+
+    // 开：接管，一直保持；关：先关掉，再立刻交还自治
+    fanManual=(on==1);
+
+    applyFan(on==1);
+
+    syncReported();
+
+    Serial.print(F("@ACK FAN "));
+
+    Serial.println(on);
+
+    if(on==0)
+    {
+      // 本轮稍后的 controlFan() 就会按温度重新判断：
+      // 温度够高它会自己转起来，并通过 @EVT FAN ON 告诉上位机
+      Serial.println(F("@EVT CTL AUTO FAN"));
+    }
+  }
+
+  else if(!strncmp(cmd,"LAMP",4)&&(cmd[4]=='\0'||cmd[4]==' '))
+  {
+    // LAMP AUTO：显式交还，交回光敏自治
+    if(!strncmp(cmd+4," AUTO",5))
+    {
+      releaseLamp();
+
+      Serial.println(F("@ACK LAMP AUTO"));
+
+      return;
+    }
+
+    int on=cmdArg(cmd,1,-1);
+
+    // 第二个参数是亮度 0~100，省略就沿用当前值
+    int lv=cmdArg(cmd,2,-1);
+
+    if(on<0||on>1)
+    {
+      Serial.println(F("@NAK LAMP"));
+
+      return;
+    }
+
+    // 开：接管，一直保持；关：灭灯即交还
+    lampManual=(on==1);
+
+    applyLamp(on==1,(lv>=0)?lv:(int)lampLevel);
+
+    if(!lampOn)
+    {
+      // 灯灭会让光敏由亮转暗，这不是环境变化，先挡住，别让它自己又亮起来
+      lampSettleUntil=millis()+LAMP_SETTLE_MS;
+    }
+
+    syncReported();
+
+    Serial.print(F("@ACK LAMP "));
+
+    Serial.print(lampOn?1:0);
+
+    Serial.print(' ');
+
+    Serial.println(lampLevel);
+
+    if(!lampOn)
+    {
+      Serial.println(F("@EVT CTL AUTO LAMP"));
+    }
   }
 
   else if(isCmdToken(cmd))
@@ -323,6 +608,9 @@ void loop()
 // 先收命令再做别的：回执只是拼一行字符串，不阻塞，也不影响下面各段时序
 pollSerial();
 
+
+// 接管与交还都在 pollSerial 里按命令完成，这里不再需要额外动作
+
 readLight();
 
 
@@ -342,6 +630,10 @@ controlFan();
 
 
 controlLamp();
+
+
+// 自治改了风扇/灯带就补一条 @EVT，让页面跟上
+reportStates();
 
 
 
@@ -432,6 +724,13 @@ darkState=nowDark;
 void controlFan()
 {
 
+  // 上位机接管期间（FAN 1 之后）不碰引脚，
+  // 否则刚发的 FAN 1 会被这里按 30/28 立刻改回去
+  if(fanManual)
+  {
+    return;
+  }
+
   if(temperature >= FAN_ON_TEMP)
   {
 
@@ -467,6 +766,13 @@ void controlFan()
 void controlLamp()
 {
 
+// 上位机接管期间（LAMP 1 之后）不接管
+if(lampManual)
+{
+return;
+}
+
+
 if(darkState!=oldDarkState)
 {
 
@@ -474,36 +780,16 @@ if(darkState!=oldDarkState)
 oldDarkState=darkState;
 
 
-
-if(darkState)
+// 刚把手动关掉的灯交还自治时，光敏会因为灯灭了而由亮转暗。
+// 这不是环境变化，2 秒内忽略「变暗」这一侧，否则灯会自己又亮起来
+if(darkState&&(long)(millis()-lampSettleUntil)<0)
 {
-
-
-for(int i=0;i<LED_NUM;i++)
-{
-
-strip.setPixelColor(
-i,
-strip.Color(255,180,50)
-);
-
+return;
 }
 
 
-strip.show();
-
-
-}
-else
-{
-
-
-strip.clear();
-
-strip.show();
-
-
-}
+// 交给 applyLamp 统一处理：亮度和状态只有一份，OLED 与上报都读得到
+applyLamp(darkState,lampLevel);
 
 
 }

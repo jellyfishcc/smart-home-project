@@ -183,6 +183,55 @@ class HardwareService:
             return self._skipped('固件不支持 CLOSE，等其自动关门')
         return self._command('CLOSE', bridge.close_door)
 
+    def set_fan(self, on):
+        """
+        风扇开关（手动）。
+
+        下发「开」之后固件交出控制权并一直保持（不再按温度自治），
+        直到软件再发一次「关」；「关」的瞬间固件立刻交还自治，
+        下一轮 loop 就按传感器重新判断，热的话会自己转起来并回报 @EVT。
+        """
+        bridge = self.env_bridge
+        if bridge is None:
+            return self._skipped('环境板未连接')
+        if not self._env_capable():
+            return self._skipped('环境板固件不支持 FAN 命令')
+        return self._command('FAN', lambda: bridge.send('FAN', 1 if on else 0),
+                             bridge=bridge)
+
+    def set_lamp(self, on, brightness=100):
+        """
+        灯带开关 + 亮度（0~100）。
+
+        WS2812 只有亮度和通断，没有颜色；固件把 100% 封顶在 255 的 39%，
+        因为 8 颗全白约 480mA，会顶到 UNO 的 USB 保险丝。
+        """
+        bridge = self.env_bridge
+        if bridge is None:
+            return self._skipped('环境板未连接')
+        if not self._env_capable():
+            return self._skipped('环境板固件不支持 LAMP 命令')
+
+        level = max(0, min(100, int(brightness)))
+        if on:
+            sender = lambda: bridge.send('LAMP', 1, level)
+        else:
+            sender = lambda: bridge.send('LAMP', 0)
+        return self._command('LAMP', sender, bridge=bridge)
+
+    def _env_capable(self):
+        """
+        环境板固件是否支持 FAN/LAMP（只认打过 @BOOT 1 的新固件）。
+
+        protocol 显示 legacy 有两种情况：板子还在复位、没发横幅；或者真是老固件。
+        用 boot_count 区分：收到过横幅还叫 legacy，那才是老固件该跳过。
+        老固件收到 FAN 会一声不响，硬等只会让接口卡 900ms。
+        """
+        if self.env_bridge is None:
+            return False
+        st = self.env_bridge.status()
+        return not (st.get('protocol') == 'legacy' and st.get('boot_count'))
+
     # ---------------- 入站：板子 -> 软件 ----------------
 
     def _on_event(self, msg):
@@ -223,16 +272,86 @@ class HardwareService:
 
     def _on_env_event(self, msg):
         """
-        环境板的链路事件只记日志，绝不碰门禁状态。
+        环境板的入站事件。
 
-        两块板共用一个 HardwareService，如果这里复用 _on_event，环境板一复位
-        就会被当成「门已关」，把门禁状态带偏。所以这里刻意什么都不做，
-        只把异常链路打出来。
+        两块板共用一个 HardwareService，这里只跟风扇/灯带，绝不碰门禁状态：
+        如果复用 _on_event，环境板一复位就会被当成「门已关」。
+
+        为什么要处理 @EVT FAN/LAMP：板子还有自治逻辑（温度到 30 开风扇、
+        天黑开灯），它自己改了状态就得让页面跟上，否则两边各说各话。
         """
-        if msg.kind == 'EVT' and msg.name == 'LINK':
-            logger.warning('[Hardware] 环境板链路: %s', ' '.join(msg.args))
-        elif msg.kind == 'NAK':
-            logger.info('[Hardware] 环境板回绝 %s: %s', msg.name, ' '.join(msg.args))
+        try:
+            if msg.kind == 'BOOT':
+                # 复位后风扇停、灯带灭（setup() 的初始状态），软件状态跟着回零
+                logger.info('[Hardware] 环境板复位，风扇/灯带状态回零')
+                self._sync_env_state(fan=False, lamp=False)
+                self._emit_status()
+
+            elif msg.kind == 'EVT' and msg.name == 'FAN':
+                state = msg.args[0].upper() if msg.args else ''
+                if state in ('ON', 'OFF'):
+                    self._sync_env_state(fan=(state == 'ON'))
+
+            elif msg.kind == 'EVT' and msg.name == 'LAMP':
+                state = msg.args[0].upper() if msg.args else ''
+                level = None
+                if len(msg.args) > 1:
+                    try:
+                        level = int(msg.args[1])
+                    except ValueError:
+                        level = None
+                if state in ('ON', 'OFF'):
+                    self._sync_env_state(lamp=(state == 'ON'), brightness=level)
+
+            elif msg.kind == 'EVT' and msg.name == 'CTL':
+                logger.info('[Hardware] 环境板已交还自治: %s',
+                            ' '.join(msg.args) or '-')
+
+            elif msg.kind == 'EVT' and msg.name == 'LINK':
+                logger.warning('[Hardware] 环境板链路: %s', ' '.join(msg.args))
+
+            elif msg.kind == 'NAK':
+                logger.info('[Hardware] 环境板回绝 %s: %s', msg.name, ' '.join(msg.args))
+
+        except Exception:
+            logger.exception('[Hardware] 处理环境板事件失败: %s', msg)
+
+    def _sync_env_state(self, fan=None, lamp=None, brightness=None):
+        """
+        把环境板的事实同步到软件状态（风扇/灯带）。
+
+        source='hardware' 让 DeviceManager 跳过下发，否则会形成
+        「命令 -> @EVT -> 命令」的死循环。只有真的变了才写，避免刷日志。
+        """
+        dm = self._device_manager
+        if dm is None:
+            return
+
+        if fan is not None:
+            current = dm.get_device('fan').get('on')
+            if current != fan:
+                logger.info('[Hardware] 同步风扇状态 -> %s', 'on' if fan else 'off')
+                self._device_call('fan', 'on' if fan else 'off')
+
+        if lamp is not None:
+            current = dm.get_device('light')
+            if lamp:
+                want = int(brightness) if brightness else int(current.get('brightness') or 50)
+                if not current.get('on') or int(current.get('brightness') or 0) != want:
+                    logger.info('[Hardware] 同步灯光状态 -> on %s%%', want)
+                    self._device_call('light', 'on', want)
+            elif current.get('on'):
+                logger.info('[Hardware] 同步灯光状态 -> off')
+                self._device_call('light', 'off')
+
+    def _device_call(self, device, status, value=None):
+        if self._app:
+            with self._app.app_context():
+                self._device_manager.set_device(device, status, value=value,
+                                                source='hardware')
+        else:
+            self._device_manager.set_device(device, status, value=value,
+                                            source='hardware')
 
     def _on_data(self, msg):
         try:
@@ -308,10 +427,15 @@ class HardwareService:
 
     # ---------------- 命令执行与兜底计时 ----------------
 
-    def _command(self, name, sender):
-        bridge = self.door_bridge
+    def _command(self, name, sender, bridge=None, missing='硬件未连接'):
+        """
+        执行一条串口命令并整理成可直接塞进 JSON 的结果。
+
+        bridge 默认走门禁板；环境板的 FAN/LAMP 显式传 env_bridge 进来。
+        """
+        bridge = self.door_bridge if bridge is None else bridge
         if bridge is None:
-            return self._skipped('硬件未连接')
+            return self._skipped(missing)
 
         result = sender()
         info = {

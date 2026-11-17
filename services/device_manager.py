@@ -50,7 +50,8 @@ class DeviceManager:
         """
         挂接硬件对接层。传 None 表示纯软件模式，所有控制只更新内存状态。
 
-        对接层只需要提供 open_door() / close_door()，返回一个可 JSON 化的字典。
+        对接层需要提供 open_door() / close_door() / set_fan() / set_lamp()，
+        每个方法返回一个可 JSON 化的字典。
         DeviceManager 不关心底层是串口、MQTT 还是别的什么，也不 importing 它。
         """
         self._hardware = hardware
@@ -153,7 +154,7 @@ class DeviceManager:
         # 再回发一次会形成 命令 -> 事件 -> 命令 的死循环，必须排除。
         hardware_info = None
         if source != 'hardware':
-            hardware_info = self._dispatch_hardware(device_name, status)
+            hardware_info = self._dispatch_hardware(device_name, status, value)
 
         result = {
             'device': device_name,
@@ -166,13 +167,18 @@ class DeviceManager:
             result['hardware'] = hardware_info
         return result
 
-    def _dispatch_hardware(self, device_name, status):
+    def _dispatch_hardware(self, device_name, status, value=None):
         """
         把设备状态变化转成硬件命令；返回 None 表示这次变化不需要下发。
 
-        目前只有门禁板接得上：它有 OPEN，新固件还有 CLOSE。
-        环境板已经能回温湿度（QENV -> @DATA ENV），但固件还没有收控制命令的分支，
-        风扇和灯带仍由板子自己按阈值判断，所以这里不给它派发任何东西。
+        door  -> UNO II（舵机）：OPEN / CLOSE
+        light -> UNO I（WS2812）：LAMP 1 <亮度> / LAMP 0
+        fan   -> UNO I（风扇模块）：FAN 1 / FAN 0
+
+        环境板这两条命令按「开即接管、关即交还」执行：
+        下发「开」之后固件不再按温度/光线自治，一直保持到软件再发「关」；
+        下发「关」之后固件立刻交还自治，下一轮就重新按传感器判断。
+        所以这里下发是安全的，不会刚开就被板子改回去。
         """
         hw = self._hardware
         if hw is None:
@@ -184,6 +190,26 @@ class DeviceManager:
                 handler = getattr(hw, 'open_door', None)
             elif status == 'locked':
                 handler = getattr(hw, 'close_door', None)
+
+        elif device_name == 'light':
+            setter = getattr(hw, 'set_lamp', None)
+            if setter is not None:
+                if status == 'on':
+                    # 亮度取这次下发的值，没带就用当前状态，避免传 None 把灯调暗
+                    level = value if value is not None else self.get_device('light').get('brightness')
+                    try:
+                        level = int(level)
+                    except (TypeError, ValueError):
+                        level = 50
+                    handler = lambda: setter(True, level)   # noqa: E731
+                elif status == 'off':
+                    handler = lambda: setter(False)         # noqa: E731
+
+        elif device_name == 'fan':
+            setter = getattr(hw, 'set_fan', None)
+            if setter is not None and status in ('on', 'off'):
+                handler = lambda: setter(status == 'on')    # noqa: E731
+
         if handler is None:
             return None
 

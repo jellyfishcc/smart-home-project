@@ -44,10 +44,17 @@ class EnvBoard:
 
         def reply():
             time.sleep(0.01)
+            parts = text.split()
             if text == 'QENV':
                 self.push(b'@DATA ENV 253 610 1\r\n')
             elif text == 'PING':
                 self.push(b'@PONG 1234\r\n')
+            elif parts and parts[0] == 'FAN':
+                self.push(('@ACK FAN %s\r\n' % parts[1]).encode('ascii'))
+            elif parts and parts[0] == 'LAMP':
+                # 固件回的是「实际生效」的开关和亮度，省略亮度就沿用上一次
+                level = parts[2] if len(parts) > 2 else '30'
+                self.push(('@ACK LAMP %s %s\r\n' % (parts[1], level)).encode('ascii'))
             else:
                 self.push(('@NAK %s\r\n' % text).encode('ascii'))
 
@@ -95,6 +102,8 @@ class QEnvBridgeTest(unittest.TestCase):
         bridge._boot_seen = True
         self.data = []
         bridge.on_data(lambda m: self.data.append(str(m)))
+        self.events = []
+        bridge.on_event(lambda m: self.events.append(str(m)))
         threading.Thread(target=bridge._reader_loop, daemon=True).start()
         time.sleep(0.05)
         self.addCleanup(bridge._stop.set)
@@ -150,16 +159,58 @@ class QEnvBridgeTest(unittest.TestCase):
         bridge = self._attach(EnvBoard(boot_banner=False))
         self.assertIsNotNone(bridge.ping())
 
+    def test_fan_command_matches_its_ack(self):
+        """@ACK FAN 1 的等待键是命令名 'FAN'，不能被 @EVT FAN 抢走"""
+        board = EnvBoard(boot_banner=False)
+        bridge = self._attach(board)
+
+        result = bridge.send('FAN', 1)
+        self.assertTrue(result, result.error)
+        self.assertEqual(result.reply.args, ['1'])
+        self.assertEqual(board.written, ['FAN 1'])
+
+    def test_lamp_command_carries_brightness(self):
+        board = EnvBoard(boot_banner=False)
+        bridge = self._attach(board)
+
+        result = bridge.send('LAMP', 1, 60)
+        self.assertTrue(result, result.error)
+        self.assertEqual(result.reply.args, ['1', '60'])
+        self.assertEqual(board.written, ['LAMP 1 60'])
+
+    def test_ack_is_not_replayed_as_event(self):
+        """回执已经被等待者吃掉，不能再当事件抛给业务层，否则会二次同步"""
+        board = EnvBoard(boot_banner=False)
+        bridge = self._attach(board)
+        bridge.send('FAN', 0)
+
+        self.assertEqual(self.events, [])
+
 
 class _RecordingDeviceManager:
+    """带最小状态的假 DeviceManager：BOOT 回读会去查风扇/灯光当前状态"""
+
     def __init__(self):
         self.calls = []
+        self._state = {
+            'door': {'locked': True},
+            'fan': {'on': False, 'speed': 0},
+            'light': {'on': False, 'brightness': 0},
+        }
 
     def get_device(self, name):
-        return {'locked': True}
+        return dict(self._state.get(name, {}))
 
-    def set_device(self, *args, **kwargs):
-        self.calls.append((args, kwargs))
+    def set_device(self, device, status, value=None, source='manual', **kwargs):
+        self.calls.append((device, status, value, source))
+        if device == 'fan':
+            self._state['fan']['on'] = (status == 'on')
+        elif device == 'light':
+            self._state['light']['on'] = (status == 'on')
+            if status == 'off':
+                self._state['light']['brightness'] = 0
+            elif value is not None:
+                self._state['light']['brightness'] = int(value)
 
 
 class _RecordingSocketIO:

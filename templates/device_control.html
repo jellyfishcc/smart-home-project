@@ -12,6 +12,24 @@
     </button>
 </div>
 
+<!-- 硬件链路状态：按钮点了没反应时，先看这一行 -->
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-body" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:12px 20px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span class="badge badge-secondary" id="hwDoorBadge">门禁板</span>
+            <span id="hwDoorText" style="font-size:12px;color:var(--color-text-light);">检测中...</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span class="badge badge-secondary" id="hwEnvBadge">环境板</span>
+            <span id="hwEnvText" style="font-size:12px;color:var(--color-text-light);">检测中...</span>
+        </div>
+        <div style="flex:1;min-width:200px;font-size:12px;color:var(--color-text-light);" id="hwLastCommand">最近命令：—</div>
+        <button class="btn btn-outline btn-sm" onclick="loadHardwareStatus()">
+            <i class="bi bi-plug"></i> 链路诊断
+        </button>
+    </div>
+</div>
+
 <div class="grid-3">
     <!-- 灯光控制 -->
     <div class="card">
@@ -192,10 +210,73 @@
 document.addEventListener('DOMContentLoaded', () => {
     loadDeviceStatus();
     loadDeviceHistory();
+    loadHardwareStatus();
+    setInterval(loadHardwareStatus, 10000);
+    socket.on('hardware_status', renderHardware);
     socket.on('device_update', (data) => {
         updateDeviceUI(data.device, data.state);
     });
 });
+
+// 硬件链路状态：串口没开 / 板子掉了，这里会直接显出来
+async function loadHardwareStatus() {
+    try {
+        const res = await API.get('/api/hardware/status');
+        if (res.code === 0) renderHardware(res.data);
+    } catch (e) {
+        console.error('读取硬件状态失败:', e);
+    }
+}
+
+function setHwBadge(id, ok, text) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'badge ' + (ok ? 'badge-success' : 'badge-danger');
+    el.textContent = text;
+}
+
+function renderHardware(data) {
+    if (!data) return;
+    const door = data.door_bridge || {};
+    const env = data.env_bridge || {};
+
+    setHwBadge('hwDoorBadge', !!door.connected, door.connected ? '门禁板在线' : '门禁板离线');
+    const doorText = document.getElementById('hwDoorText');
+    if (doorText) {
+        if (data.door_bridge === null) {
+            doorText.textContent = data.enabled ? '启动失败，查日志' : '串口未启用';
+        } else if (door.port) {
+            doorText.textContent = `${door.port} · ${door.protocol === 'legacy' ? '旧固件（无 CLOSE）' : '协议 v' + door.protocol}`;
+        } else {
+            doorText.textContent = '端口未打开';
+        }
+    }
+
+    setHwBadge('hwEnvBadge', !!env.connected, env.connected ? '环境板在线' : '环境板离线');
+    const envText = document.getElementById('hwEnvText');
+    if (envText) {
+        if (data.env_bridge === null) {
+            envText.textContent = '未启用';
+        } else if (env.port) {
+            envText.textContent = `${env.port} · 协议 v${env.protocol}`;
+        } else {
+            envText.textContent = '端口未打开';
+        }
+    }
+
+    const cmd = document.getElementById('hwLastCommand');
+    const last = data.last_command;
+    if (cmd) {
+        if (!last) {
+            cmd.textContent = '最近命令：—';
+            cmd.style.color = 'var(--color-text-light)';
+        } else {
+            const tail = last.error ? ` · ${last.error}` : '';
+            cmd.textContent = `最近命令：${last.command} ${last.ok ? '成功' : '失败'} ${Math.round(last.elapsed_ms)}ms${tail}`;
+            cmd.style.color = last.ok ? 'var(--color-text-light)' : 'var(--color-danger)';
+        }
+    }
+}
 
 async function loadDeviceStatus() {
     try {
@@ -268,10 +349,24 @@ function updateDeviceUI(device, state) {
     }
 }
 
+// 硬件下发失败时不能只说「已切换」：页面开着、板子没动最误导人
+function hwWarning(result) {
+    const hw = result && result.hardware;
+    if (hw && hw.ok === false) {
+        return hw.error || (hw.skipped ? '硬件未连接' : '硬件未响应');
+    }
+    return '';
+}
+
 async function toggleDevice(device) {
     try {
-        await API.post(`/api/devices/${device}/toggle`, { source: 'remote' });
-        showToast(`${device} 已切换`, 'success');
+        const res = await API.post(`/api/devices/${device}/toggle`, { source: 'remote' });
+        const warn = hwWarning(res.data);
+        if (warn) {
+            showToast(`${device} 状态已更新，但硬件未确认：${warn}`, 'error');
+        } else {
+            showToast(`${device} 已切换`, 'success');
+        }
     } catch (e) {
         showToast('操作失败', 'error');
         loadDeviceStatus();
@@ -288,7 +383,12 @@ async function setLightBrightness(brightness) {
         const res = await API.post('/api/devices/light/brightness', { brightness: parseInt(brightness), source: 'remote' });
         if (res.code === 0) {
             updateDeviceUI('light', res.data.state);
-            showToast(`灯光亮度设为 ${brightness}%`, 'success');
+            const warn = hwWarning(res.data);
+            if (warn) {
+                showToast(`亮度已记录，但硬件未确认：${warn}`, 'error');
+            } else {
+                showToast(`灯光亮度设为 ${brightness}%`, 'success');
+            }
         }
     } catch (e) {
         showToast('设置失败', 'error');
@@ -303,7 +403,12 @@ function onACSlide() {
 async function setACTemp(temp) {
     try {
         const res = await API.post('/api/devices/ac/control', { status: 'on', value: parseInt(temp), source: 'remote' });
-        if (res.code === 0) {
+        const warn = hwWarning(res.data);
+        if (warn) {
+            showToast(`空调设定已记录，但硬件未确认：${warn}`, 'error', 6000);
+        } else if (!(res.data && res.data.hardware)) {
+            showToast(`空调温度设为 ${temp}°C（仅记录状态，空调无硬件执行器）`, 'info', 4000);
+        } else {
             showToast(`空调温度设为 ${temp}°C`, 'success');
         }
     } catch (e) {
@@ -313,12 +418,18 @@ async function setACTemp(temp) {
 
 async function setFanSpeed(speed) {
     try {
+        let res;
         if (parseInt(speed) === 0) {
-            await API.post('/api/devices/fan/control', { status: 'off', source: 'remote' });
+            res = await API.post('/api/devices/fan/control', { status: 'off', source: 'remote' });
         } else {
-            await API.post('/api/devices/fan/control', { status: 'on', value: parseInt(speed), source: 'remote' });
+            res = await API.post('/api/devices/fan/control', { status: 'on', value: parseInt(speed), source: 'remote' });
         }
-        showToast(`风扇档位设为 ${speed}`, 'success');
+        const warn = hwWarning(res.data);
+        if (warn) {
+            showToast(`风扇已记录为 ${speed} 档，但硬件未确认：${warn}`, 'error', 5000);
+        } else {
+            showToast(`风扇档位设为 ${speed}`, 'success');
+        }
         loadDeviceStatus();
     } catch (e) {
         showToast('设置失败', 'error');
@@ -327,8 +438,14 @@ async function setFanSpeed(speed) {
 
 async function controlDoor(status) {
     try {
-        await API.post('/api/devices/door/control', { status: status, source: 'remote' });
-        showToast(status === 'unlocked' ? '门已开锁' : '门已锁定', status === 'unlocked' ? 'warning' : 'success');
+        const res = await API.post('/api/devices/door/control', { status: status, source: 'remote' });
+        const warn = hwWarning(res.data);
+        const msg = status === 'unlocked' ? '门已开锁' : '门已锁定';
+        if (warn) {
+            showToast(`${msg}（仅软件状态）— 硬件未确认：${warn}`, 'error', 6000);
+        } else {
+            showToast(msg, status === 'unlocked' ? 'warning' : 'success');
+        }
         loadDeviceStatus();
     } catch (e) {
         showToast('操作失败', 'error');
@@ -337,8 +454,16 @@ async function controlDoor(status) {
 
 async function controlWindow(status) {
     try {
-        await API.post('/api/devices/window/control', { status: status, source: 'remote' });
-        showToast(status === 'open' ? '窗户已打开' : '窗户已关闭', 'info');
+        const res = await API.post('/api/devices/window/control', { status: status, source: 'remote' });
+        const warn = hwWarning(res.data);
+        const msg = status === 'open' ? '窗户已打开' : '窗户已关闭';
+        if (warn) {
+            showToast(`${msg}（仅软件状态）— 硬件未确认：${warn}`, 'error', 6000);
+        } else if (!(res.data && res.data.hardware)) {
+            showToast(`${msg}（仅记录状态，窗户无硬件执行器）`, 'info', 4000);
+        } else {
+            showToast(msg, 'info');
+        }
         loadDeviceStatus();
     } catch (e) {
         showToast('操作失败', 'error');
