@@ -236,6 +236,7 @@ class SerialBridge:
                  heartbeat_interval: float = 3.0,
                  offline_timeout: float = 10.0,
                  rain_poll_interval: float = 30.0,
+                 env_poll_interval: float = 0.0,
                  reconnect_delay: float = 2.0,
                  read_timeout: float = 0.2):
         self.port = port
@@ -246,6 +247,7 @@ class SerialBridge:
         self.heartbeat_interval = float(heartbeat_interval)
         self.offline_timeout = float(offline_timeout)
         self.rain_poll_interval = float(rain_poll_interval)
+        self.env_poll_interval = float(env_poll_interval)
         self.reconnect_delay = float(reconnect_delay)
         self.read_timeout = float(read_timeout)
 
@@ -446,6 +448,33 @@ class SerialBridge:
             return False
         return None
 
+    def query_env(self):
+        """
+        查询环境板温湿度：返回 (温度℃, 湿度%)，问不到返回 None。
+
+        固件回的是 `@DATA ENV <温度×10> <湿度×10> [DHT有效标志]`，这里换算回来。
+        温度在前、湿度在后是硬约定 —— 反了不会报错，只会让页面上两个值互换。
+        第三个字段缺省时视为有效；为 '0' 说明板子还没读到 DHT（此时数值是上电默认值）。
+        """
+        result = self.send('QENV')
+        if not result.ok or result.reply is None:
+            return None
+        args = result.reply.args
+        if len(args) < 2:
+            return None
+        try:
+            return (round(int(args[0]) / 10.0, 1), round(int(args[1]) / 10.0, 1))
+        except ValueError:
+            logger.warning('[Serial] 环境数据格式不对: %s', args)
+            return None
+
+    def query_env_raw(self):
+        """查询环境板原始报文，返回 `@DATA ENV` 的整个 args 列表（含有效标志）"""
+        result = self.send('QENV')
+        if not result.ok or result.reply is None:
+            return None
+        return list(result.reply.args)
+
     def ping(self):
         """心跳探测，返回往返毫秒数；失败返回 None"""
         result = self.send('PING', retries=0)
@@ -626,6 +655,10 @@ class SerialBridge:
             key = 'PING'
         elif msg.kind == 'DATA' and msg.name == 'RAIN':
             key = 'QRAIN'   # 旧固件用一个 DATA 行回答 QRAIN
+        elif msg.kind == 'DATA' and msg.name == 'ENV':
+            # 环境板用 @DATA ENV 回答 QENV。少这一行，send('QENV') 会白等到超时
+            # 再重发两次（数据其实到了，只是没人接），日志里就是「三连超时」
+            key = 'QENV'
         if not key:
             return False
 
@@ -647,12 +680,13 @@ class SerialBridge:
                 logger.exception('[Serial] 消息回调异常: %s', msg)
 
     def _check_liveness(self):
-        # 固件不会主动说话，只有心跳/轮询才有流量；两者都关掉时不做离线判定
-        if self.heartbeat_interval <= 0 and self.rain_poll_interval <= 0:
+        # 固件不会主动说话，只有心跳/轮询才有流量；都关掉时不做离线判定
+        if (self.heartbeat_interval <= 0 and self.rain_poll_interval <= 0
+                and self.env_poll_interval <= 0):
             return
         # 判离线要按「预期多久应该有一次上行」来算，否则轮询周期比超时还长，
         # 板子明明活着也会被反复判成离线
-        keepalive = self.heartbeat_interval or self.rain_poll_interval
+        keepalive = self.heartbeat_interval or self.rain_poll_interval or self.env_poll_interval
         window = max(self.offline_timeout, keepalive * 3)
         with self._lock:
             silent = time.time() - self._last_rx
@@ -698,6 +732,9 @@ class SerialBridge:
         tick = 0.2
         next_heartbeat = time.time() + self.heartbeat_interval if self.heartbeat_interval > 0 else 0
         next_rain = time.time() + self.rain_poll_interval if self.rain_poll_interval > 0 else 0
+        # 第一次别等满一个周期：开机后 1s（或更短）就去要一次，页面上不用空等 10 秒
+        next_env = (time.time() + min(1.0, self.env_poll_interval)
+                    if self.env_poll_interval > 0 else 0)
 
         while not self._stop.is_set():
             if self._stop.wait(tick):
@@ -725,8 +762,12 @@ class SerialBridge:
                 if keepalive != 'QRAIN':    # 心跳已经在轮询雨滴，不必重复发
                     self._send_quiet('QRAIN')
 
+            if next_env and now >= next_env:
+                next_env = now + self.env_poll_interval
+                self._send_quiet('QENV')    # 环境板靠这条把温湿度顶上来
+
 
 # 全局实例由 app.py 按配置决定是否启动。
-# 环境板（UNOI）暂时没有实例：它的固件既不上报也不接收串口命令，
-# 真接上只会连上又立刻判离线，反而误导前端。
+# 环境板（UNO I）不在这里建：它需要独立的端口实例，由 HardwareService 启动时
+# 按 SMART_HOME_SERIAL_ENV_PORT 现建一个（见 _start_env_bridge）。
 door_bridge = SerialBridge()

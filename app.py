@@ -109,21 +109,22 @@ sentry_service.set_face_service(face_service)
 sentry_service.set_camera_stream(camera_stream)
 atexit.register(sentry_service.shutdown)
 
-# 硬件对接：只有 SMART_HOME_SERIAL_ENABLED=1 才启动。
-# 启动失败（没插板、没装驱动）只告警，不影响其余功能，行为与纯软件模式一致。
+# 硬件对接：门禁板看 SMART_HOME_SERIAL_ENABLED，环境板看 SMART_HOME_SERIAL_ENV_ENABLED。
+# 两块板各占一条串口，任一启用就启动本层；启动失败（没插板、没装驱动）只告警，
+# 不影响其余功能，行为与纯软件模式一致。
 hardware_service.init_app(app)
 hardware_service.set_socketio(socketio)
 hardware_service.set_device_manager(device_manager)
 atexit.register(hardware_service.shutdown)
 
-if config.SERIAL_ENABLED:
+if config.SERIAL_ENABLED or config.SERIAL_ENV_ENABLED:
     if hardware_service.start():
         # 只有真正起来了才挂出站钩子；否则 set_device 完全不碰硬件
         device_manager.set_hardware_bridge(hardware_service)
     else:
         logger.warning('硬件串口启动失败，继续以纯软件模式运行')
 else:
-    logger.info('硬件串口未启用（SMART_HOME_SERIAL_ENABLED=0）')
+    logger.info('硬件串口未启用（SMART_HOME_SERIAL_ENABLED / SMART_HOME_SERIAL_ENV_ENABLED 都为 0）')
 
 
 def _log_device_status(device_name, status, value, source):
@@ -236,6 +237,7 @@ if __name__ == '__main__':
     logger.info(f'  传感器模式: {"模拟" if config.SIMULATION_MODE else "真实"}')
     _hw = hardware_service.status()
     logger.info('  硬件串口: %s', (_hw['door_bridge'] or {}).get('port', '已启用') if _hw['running'] else '未启用')
+    logger.info('  环境板串口: %s', ((_hw.get('env_bridge') or {}).get('port') or '未启用'))
     logger.info('  访问地址: http://localhost:5000')
     logger.info('=' * 50)
 

@@ -102,6 +102,126 @@ float oldHum=-100;
 bool oldFan=false;
 
 
+//================ 串口回传 QENV（新增） ================
+//
+// 契约：收到 "QENV\n" -> 回 "@DATA ENV <温度x10> <湿度x10> <DHT有效标志>"
+//       例：25.3℃ / 61.0% -> "@DATA ENV 253 610 1"
+//       第三位为 0 表示 readDHT() 还没成功过，此时的 25/50 是上电默认值
+//
+// 为什么不能「收到就现场读 DHT」：
+//   DHT11 一次读取要忙等 20~25ms，而下面 readDHT() 是连读两遍（湿度+温度）
+//   ≈46ms；上位机的应答超时只有 300ms 且失败会重发 2 次。现场读会让多条
+//   QENV 在 64 字节接收缓冲里排队，还会撞上重发时机。
+//   所以这里只读 temperature / humidity 这两个已经被 readDHT() 更新好的全局量，
+//   回执不到 1ms 就发完，完全不碰传感器时序、引脚和舵机/风扇逻辑。
+
+#define CMD_BUF_SIZE 16
+
+char cmdBuf[CMD_BUF_SIZE];
+
+uint8_t cmdLen=0;
+
+// readDHT() 读到有效值时置 true；false 表示温湿度还是上电默认值
+bool dhtOk=false;
+
+
+// 把缓存值按协议回给上位机（整数、放大 10 倍，避免 AVR 上打印浮点）
+void replyEnv()
+{
+  Serial.print(F("@DATA ENV "));
+
+  Serial.print((long)(temperature*10.0+0.5));
+
+  Serial.print(' ');
+
+  Serial.print((long)(humidity*10.0+0.5));
+
+  Serial.print(' ');
+
+  Serial.println(dhtOk?1:0);
+}
+
+
+// 只认全大写的命令字，避免把复位瞬间的残留字节当成命令去 NAK
+bool isCmdToken(const char* s)
+{
+  if(s[0]=='\0')
+  {
+    return false;
+  }
+
+  for(uint8_t i=0;s[i];i++)
+  {
+    if(s[i]<'A'||s[i]>'Z')
+    {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+
+void handleCmd(const char* cmd)
+{
+  if(!strcmp(cmd,"QENV"))
+  {
+    replyEnv();
+  }
+
+  else if(!strcmp(cmd,"PING"))
+  {
+    // 心跳：上位机靠它判断环境板是否在线
+    Serial.print(F("@PONG "));
+
+    Serial.println(millis());
+  }
+
+  else if(isCmdToken(cmd))
+  {
+    Serial.print(F("@NAK "));
+
+    Serial.println(cmd);
+  }
+
+  // 其余一律当噪声丢弃
+}
+
+
+// 非阻塞收行：逐字符攒到 '\n' 再整行分派。
+// 千万不能用「攒满一行再整体比较」的老写法，多条命令连发时会拼成一串。
+void pollSerial()
+{
+  while(Serial.available()>0)
+  {
+    char c=(char)Serial.read();
+
+    if(c=='\n'||c=='\r')
+    {
+      if(cmdLen>0)
+      {
+        cmdBuf[cmdLen]='\0';
+
+        handleCmd(cmdBuf);
+
+        cmdLen=0;
+      }
+    }
+
+    else if(cmdLen<CMD_BUF_SIZE-1)
+    {
+      cmdBuf[cmdLen++]=c;
+    }
+
+    else
+    {
+      // 超长行直接丢弃，防止缓冲区溢出
+      cmdLen=0;
+    }
+  }
+}
+
+
 //================ SETUP ================
 
 
@@ -181,7 +301,10 @@ dht.begin();
 delay(1000);
 
 
-Serial.println("Ready");
+// 启动横幅：@BOOT 1 让上位机知道这块板支持串口命令（1 = 协议版本 1）。
+// 老固件打的是裸文本 "Ready"，上位机会当 legacy 处理并改用 QRAIN 保活，
+// 而环境板并没有雨滴模块，链路会被反复误判成离线。
+Serial.println(F("@BOOT 1"));
 
 
 }
@@ -197,6 +320,8 @@ Serial.println("Ready");
 void loop()
 {
 
+// 先收命令再做别的：回执只是拼一行字符串，不阻塞，也不影响下面各段时序
+pollSerial();
 
 readLight();
 
@@ -247,6 +372,8 @@ void readDHT()
     humidity=h;
 
     temperature=t;
+
+    dhtOk=true;   // [QENV] 只加这一个标志，采样时序不变
 
   }
 

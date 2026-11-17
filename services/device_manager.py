@@ -171,7 +171,8 @@ class DeviceManager:
         把设备状态变化转成硬件命令；返回 None 表示这次变化不需要下发。
 
         目前只有门禁板接得上：它有 OPEN，新固件还有 CLOSE。
-        环境板固件既没有 Serial.read 也没有上行，等它补齐后在这里加分支即可。
+        环境板已经能回温湿度（QENV -> @DATA ENV），但固件还没有收控制命令的分支，
+        风扇和灯带仍由板子自己按阈值判断，所以这里不给它派发任何东西。
         """
         hw = self._hardware
         if hw is None:

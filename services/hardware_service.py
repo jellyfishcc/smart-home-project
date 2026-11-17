@@ -30,7 +30,11 @@ DEFAULT_AUTO_CLOSE_GRACE = 6.0
 
 
 class HardwareService:
-    """一块门禁板的业务对接；环境板暂未接入（固件没有上行通道）"""
+    """门禁板（UNO II）+ 环境板（UNO I）的业务对接。
+
+    两块板各占一条串口，各自一个 SerialBridge 实例，互不认识：
+    门禁板走 OPEN/CLOSE/QRAIN，环境板走 QENV -> @DATA ENV。
+    """
 
     def __init__(self):
         self._app = None
@@ -38,11 +42,13 @@ class HardwareService:
         self._device_manager = None
 
         self.door_bridge = None
+        self.env_bridge = None
         self._running = False
 
         self._lock = threading.Lock()
         self._auto_close_timer = None
         self._rain = None
+        self._env = None
         self._last_event_at = 0.0
         self._recent = deque(maxlen=30)   # 最近事件，供调试与前端展示
         self._last_command = None
@@ -61,7 +67,7 @@ class HardwareService:
     # ---------------- 生命周期 ----------------
 
     def start(self):
-        """按配置启动门禁板串口；失败只告警，不影响其它功能"""
+        """按配置启动两块板；任意一块起来就算成功，失败只告警不影响其它功能"""
         if self._running:
             return True
         if not PYSERIAL_AVAILABLE:
@@ -69,27 +75,80 @@ class HardwareService:
             return False
 
         cfg = self._app.config if self._app else {}
+        started = False
+
+        # ---- 门禁板（UNO II）：SERIAL_ENABLED 控制，行为和以前完全一致 ----
+        if cfg.get('SERIAL_ENABLED'):
+            bridge = SerialBridge(
+                port=cfg.get('SERIAL_PORT', ''),
+                baudrate=cfg.get('SERIAL_BAUD', 9600),
+                cmd_timeout=cfg.get('SERIAL_CMD_TIMEOUT', 0.3),
+                retries=cfg.get('SERIAL_CMD_RETRIES', 2),
+                boot_wait=cfg.get('SERIAL_BOOT_WAIT', 2.5),
+                heartbeat_interval=cfg.get('SERIAL_HEARTBEAT_INTERVAL', 3.0),
+                offline_timeout=cfg.get('SERIAL_OFFLINE_TIMEOUT', 10.0),
+                rain_poll_interval=cfg.get('SERIAL_RAIN_POLL_INTERVAL', 30.0),
+                reconnect_delay=cfg.get('SERIAL_RECONNECT_DELAY', 2.0),
+            )
+            bridge.on_event(self._on_event)
+            bridge.on_data(self._on_data)
+
+            if not bridge.start():
+                return False
+
+            self.door_bridge = bridge
+            started = True
+            logger.info('[Hardware] 门禁板对接已启动')
+
+        # ---- 环境板（UNO I）：可选件，没配端口就不启动 ----
+        self.env_bridge = self._start_env_bridge(cfg)
+
+        if self.env_bridge and self.door_bridge and not cfg.get('SERIAL_PORT'):
+            # 门禁板端口留空时会在 reader 线程里自动探测，很可能摸到环境板那条口，
+            # 两块板抢一个 COM 会互相踩。这里只提醒，不擅自改行为
+            logger.warning('[Hardware] 门禁板端口为自动探测，可能与环境板抢同一个 COM；'
+                           '建议显式设置 SMART_HOME_SERIAL_PORT')
+
+        if not started and self.env_bridge is None:
+            return False
+
+        self._running = True
+        return True
+
+    def _start_env_bridge(self, cfg):
+        """
+        环境板（UNO I）：独立一条串口，只收 @DATA ENV / @PONG，不参与门禁逻辑。
+
+        端口必须显式配置。留空时绝不退回自动探测 —— 自动探测会挑中门禁板那条口，
+        两块板共用一个 COM 会互相踩，且打开串口会因 DTR 把对方复位。
+        """
+        if not cfg.get('SERIAL_ENV_ENABLED'):
+            return None
+        port = cfg.get('SERIAL_ENV_PORT', '')
+        if not port:
+            logger.warning('[Hardware] 环境板已启用但未配置环境板端口，跳过'
+                           '（设 SMART_HOME_SERIAL_ENV_PORT=COM4）')
+            return None
+
         bridge = SerialBridge(
-            port=cfg.get('SERIAL_PORT', ''),
+            port=port,
             baudrate=cfg.get('SERIAL_BAUD', 9600),
             cmd_timeout=cfg.get('SERIAL_CMD_TIMEOUT', 0.3),
             retries=cfg.get('SERIAL_CMD_RETRIES', 2),
-            boot_wait=cfg.get('SERIAL_BOOT_WAIT', 2.5),
+            boot_wait=cfg.get('SERIAL_ENV_BOOT_WAIT', 4.0),
             heartbeat_interval=cfg.get('SERIAL_HEARTBEAT_INTERVAL', 3.0),
             offline_timeout=cfg.get('SERIAL_OFFLINE_TIMEOUT', 10.0),
-            rain_poll_interval=cfg.get('SERIAL_RAIN_POLL_INTERVAL', 30.0),
+            rain_poll_interval=0,        # 环境板没有雨滴模块，别发 QRAIN
+            env_poll_interval=cfg.get('SERIAL_ENV_POLL_INTERVAL', 10.0),
             reconnect_delay=cfg.get('SERIAL_RECONNECT_DELAY', 2.0),
         )
-        bridge.on_event(self._on_event)
+        bridge.on_event(self._on_env_event)
         bridge.on_data(self._on_data)
 
         if not bridge.start():
-            return False
-
-        self.door_bridge = bridge
-        self._running = True
-        logger.info('[Hardware] 门禁板对接已启动')
-        return True
+            return None
+        logger.info('[Hardware] 环境板对接已启动（%s）', port)
+        return bridge
 
     def shutdown(self):
         with self._lock:
@@ -98,7 +157,10 @@ class HardwareService:
                 self._auto_close_timer = None
         if self.door_bridge:
             self.door_bridge.stop()
+        if self.env_bridge:
+            self.env_bridge.stop()
         self.door_bridge = None
+        self.env_bridge = None
         self._running = False
 
     # ---------------- 命令转发（供 DeviceManager 调用） ----------------
@@ -159,6 +221,19 @@ class HardwareService:
         except Exception:
             logger.exception('[Hardware] 处理事件失败: %s', msg)
 
+    def _on_env_event(self, msg):
+        """
+        环境板的链路事件只记日志，绝不碰门禁状态。
+
+        两块板共用一个 HardwareService，如果这里复用 _on_event，环境板一复位
+        就会被当成「门已关」，把门禁状态带偏。所以这里刻意什么都不做，
+        只把异常链路打出来。
+        """
+        if msg.kind == 'EVT' and msg.name == 'LINK':
+            logger.warning('[Hardware] 环境板链路: %s', ' '.join(msg.args))
+        elif msg.kind == 'NAK':
+            logger.info('[Hardware] 环境板回绝 %s: %s', msg.name, ' '.join(msg.args))
+
     def _on_data(self, msg):
         try:
             if msg.name == 'RAIN':
@@ -167,8 +242,13 @@ class HardwareService:
                 self._emit_status()
 
             elif msg.name == 'ENV':
-                # 环境板扩展协议：温度已放大 10 倍存整数，避免 AVR 上的浮点打印
-                # 当前 UNOI 固件没有任何上行，这条分支等固件补了才生效
+                # 环境板回传：温度、湿度都已放大 10 倍存整数，避免 AVR 上的浮点打印。
+                # 第三个字段是固件的「DHT 读数有效」标志，0 表示现有数值还是上电默认值
+                self._env = {
+                    'args': list(msg.args),
+                    'at': time.time(),
+                }
+                self._remember(msg)
                 self._apply_env_reading(msg.args)
 
         except Exception:
@@ -182,6 +262,12 @@ class HardwareService:
             humidity = int(args[1]) / 10.0
         except ValueError:
             logger.warning('[Hardware] 环境数据格式不对: %s', args)
+            return
+
+        # 第三个字段是固件的「DHT 读数有效」标志。为 0 说明板子还没读成功过，
+        # 这两个数是上电默认的 25/50，拿去覆盖页面只会让人误以为传感器挂了
+        if len(args) >= 3 and args[2] == '0':
+            logger.info('[Hardware] 环境板尚未读到 DHT，本次读数不上报')
             return
 
         from services.sensor_simulator import sensor_simulator
@@ -299,12 +385,15 @@ class HardwareService:
 
     def status(self):
         bridge_status = self.door_bridge.status() if self.door_bridge else None
+        env_status = self.env_bridge.status() if self.env_bridge else None
         return {
             'enabled': bool(self._app.config.get('SERIAL_ENABLED')) if self._app else False,
             'running': self._running,
             'connected': bool(bridge_status and bridge_status.get('connected')),
             'rain': self._rain,
+            'env': self._env,
             'door_bridge': bridge_status,
+            'env_bridge': env_status,
             'last_command': self._last_command,
             'recent_events': list(self._recent),
         }

@@ -112,6 +112,9 @@ def main():
         if 'QRAIN' in [s.split()[0].upper() for s in args.send if s.strip()]:
             print('query_rain() ->', bridge.query_rain())
 
+        if 'QENV' in [s.split()[0].upper() for s in args.send if s.strip()]:
+            print('query_env() ->', bridge.query_env())
+
         if args.listen > 0:
             print('\n监听 %.0fs，Ctrl+C 提前结束...' % args.listen)
             time.sleep(args.listen)

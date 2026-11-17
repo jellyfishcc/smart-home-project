@@ -1,5 +1,6 @@
 #include <TM1637Display.h>
 #include <Servo.h>
+#include <SoftwareSerial.h>
 
 //================= 数码管 =================
 #define TM_CLK A0
@@ -9,6 +10,19 @@ TM1637Display tm(TM_CLK, TM_DIO);
 
 //================= 雨滴模块 =================
 #define RAIN_PIN A2
+
+//================= 语音模块（软串口）=================
+// 硬件串口 D0/D1 上挂着板载 16U2，外接模块的 TX 一旦接到 D0 就会把
+// USB 的收方向顶死（推挽输出压过 1k 电阻），因此语音模块改走软串口：
+//   A3 ← 模块 TX（UNO 收）
+//   A4 → 模块 RX（UNO 发）
+// D0/D1 留给 USB，PC 与语音两边可以同时工作。
+#define ASR_RX_PIN A3
+#define ASR_TX_PIN A4
+
+SoftwareSerial asr(ASR_RX_PIN, ASR_TX_PIN);
+
+const unsigned long ASR_BAUD = 9600;
 
 //================= 触摸门检测 =================
 #define DOOR_TOUCH_PIN 4
@@ -105,10 +119,43 @@ char scanKey()
   return 0;
 }
 
+//================ 读一条命令 =================
+// 只保留可打印 ASCII：语音模块若吐的是二进制帧（AA 55 ...），
+// 不会拼出一串脏字符去和 "OPEN"/"QRAIN" 做无谓比较
+String readCmd(Stream &port)
+{
+  String s = "";
+
+  while(port.available())
+  {
+    char c = port.read();
+
+    if(c >= 0x20 && c <= 0x7E)
+    {
+      s += c;
+    }
+
+    delay(2);
+  }
+
+  return s;
+}
+
+//================ 回执 =================
+// 同时发给语音模块和 PC：语音那边要播报，PC 那边靠这句判断命令是否成功
+void say(const char *msg)
+{
+  asr.println(msg);
+
+  Serial.println(msg);
+}
+
 //================ 初始化 =================
 void setup()
 {
   Serial.begin(9600);
+
+  asr.begin(ASR_BAUD);
 
   tm.setBrightness(5);
 
@@ -232,37 +279,24 @@ if(!doorIsOpen)
     tm.showNumberDec(1);
   }
 }
-//================ ASRPRO通信 =================
+//================ 命令处理（语音 + PC 双通道）================
+// 两个来源都收：语音模块走软串口 A3，PC 走硬件串口 D0。
+// 谁有数据就先处理谁，回执两边都发一份。
+String cmd = readCmd(asr);
 
-if(Serial.available())
+if(cmd.length() == 0)
 {
+  cmd = readCmd(Serial);
+}
 
-  String cmd = "";
-
-  while(Serial.available())
-  {
-
-    char c = Serial.read();
-
-
-    if(c!='\n' && c!='\r')
-    {
-      cmd += c;
-    }
-
-
-    delay(2);
-
-  }
-
-
-
+if(cmd.length() > 0)
+{
   //================ 语音开门 =================
 
   if(cmd == "OPEN")
   {
 
-    Serial.println("OPEN OK");
+    say("OPEN OK");
 
 
     doorServo.write(SERVO_OPEN_ANGLE);
@@ -297,7 +331,7 @@ if(Serial.available())
     if(rain == LOW)
     {
 
-      Serial.println("RAIN");
+      say("RAIN");
 
     }
 
@@ -305,7 +339,7 @@ if(Serial.available())
 
     {
 
-      Serial.println("NORAIN");
+      say("NORAIN");
 
     }
 

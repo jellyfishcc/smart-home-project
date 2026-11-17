@@ -113,6 +113,18 @@ SERIAL_RECONNECT_DELAY = float(os.environ.get('SMART_HOME_SERIAL_RECONNECT', '2'
 # 正常情况板子会主动上报「自动关门」，这个计时器只在丢包时生效
 SERIAL_DOOR_AUTO_CLOSE = float(os.environ.get('SMART_HOME_SERIAL_AUTO_CLOSE', '6'))
 
+# ---------------- 环境板（UNO I） ----------------
+# 回传契约：板子收到 `QENV\n` 后回 `@DATA ENV <温度×10> <湿度×10> <DHT有效标志>`。
+# 端口必须显式指定，留空则不启动环境板实例：自动探测会优先抢到门禁板那条口，
+# 两块板共用一个 COM 会互相踩（打开串口还会因 DTR 把对方复位）。
+SERIAL_ENV_ENABLED = os.environ.get('SMART_HOME_SERIAL_ENV_ENABLED', '0') in ('1', 'true', 'True')
+SERIAL_ENV_PORT = os.environ.get('SMART_HOME_SERIAL_ENV_PORT', '')
+# 温湿度轮询间隔（秒）。DHT11 本身两次采样要隔 ≥2s，10s 足够且不会刷屏
+SERIAL_ENV_POLL_INTERVAL = float(os.environ.get('SMART_HOME_SERIAL_ENV_POLL', '10'))
+# 等环境板启动横幅的时间（秒）。UNOI 的 setup() 里有 OLED 初始化 + delay(1000)，
+# 实测要 2.6~2.8s 才吐出 @BOOT，沿用门禁板的 2.5s 会让第一次轮询白吃一次超时
+SERIAL_ENV_BOOT_WAIT = float(os.environ.get('SMART_HOME_SERIAL_ENV_BOOT_WAIT', '4'))
+
 # 设备初始状态
 DEFAULT_DEVICE_STATES = {
     'light': {'on': False, 'brightness': 0},
