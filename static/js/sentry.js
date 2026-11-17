@@ -25,16 +25,25 @@ const state = {
     alarmRounds: 3,          // 升级告警所需轮次
     alarmActive: false,      // 是否处于告警态
     lastRound: null,         // 最近一轮巡检结论，驱动页面状态条
+    patrolCount: 0,          // 累计巡检轮次，显示在状态面板底部
 };
 
-// 每轮结论的文案（后端已给 label，这里兜底）
+// 每轮结论的展示配置。label 用页面上的四态口径，后端 label 只作兜底，
+// 这样改动文案不用同步重启后端。
 const ROUND_META = {
-    clear: { label: '无人', detail: '画面内未检测到人员' },
-    activity: { label: '有未识别人员活动', detail: '存在未识别人员' },
-    authorized: { label: '检测到已录入人脸', detail: '授权人员，正常放行' },
-    alarm: { label: '报警', detail: '检测到未授权人员' },
-    unavailable: { label: '画面异常', detail: '本轮未取到有效画面' },
-    idle: { label: '等待巡检', detail: '布防后每轮巡检结束在此更新结论' },
+    clear: { label: '无人', icon: 'bi-shield-check', detail: '画面内未检测到人员' },
+    authorized: { label: '有已认证人员', icon: 'bi-person-check', detail: '已录入人脸，正常放行' },
+    activity: { label: '未认证人员活动', icon: 'bi-person-exclamation', detail: '存在未识别人员，观察中' },
+    alarm: { label: '告警', icon: 'bi-exclamation-triangle', detail: '检测到未认证人员' },
+    unavailable: { label: '画面异常', icon: 'bi-camera-video-off', detail: '本轮未取到有效画面' },
+    idle: { label: '等待巡检', icon: 'bi-shield-slash', detail: '布防后每轮巡检结束在此更新结论' },
+};
+
+// 巡检来源，显示在状态面板底部
+const SOURCE_META = {
+    schedule: '定时巡检',
+    manual: '手动巡检',
+    simulate: '模拟入侵',
 };
 
 // 播放器运行态：轮播定时器与当前帧序号
@@ -208,6 +217,7 @@ function applyStatus(data) {
     state.alarmRounds = data.alarm_rounds || 3;
     state.alarmActive = !!data.alarm_active;
     state.lastRound = data.last_round || null;
+    state.patrolCount = data.patrol_count || 0;
 
     document.getElementById('sentryToggle').checked = state.armed;
     document.getElementById('sentryStateText').textContent = state.armed ? '哨兵已布防' : '哨兵已撤防';
@@ -264,51 +274,128 @@ function applyStatus(data) {
 }
 
 /**
- * 页面状态条：把最近一轮结论画出来。
- * 优先级：撤防 > 告警 > 本轮结论 > 等待首轮。
+ * 页面状态面板：把最近一轮结论画成大号四态指示。
+ * 优先级：告警 > 撤防 > 本轮结论 > 等待首轮。
+ * 告警放在撤防之前：撤防不会自动解除告警，此时头部徽标仍是「告警中」，
+ * 面板若显示「已撤防」会自相矛盾。
+ * 同时点亮底部四档分级条，让「当前处在哪一档」一眼可见。
  */
 function renderRoundStatus() {
-    const box = document.getElementById('sentryRound');
+    const box = document.getElementById('sentryStatus');
     if (!box) return;
 
-    const labelEl = document.getElementById('sentryRoundLabel');
-    const detailEl = document.getElementById('sentryRoundDetail');
-    const timeEl = document.getElementById('sentryRoundTime');
+    const labelEl = document.getElementById('sentryStatusLabel');
+    const detailEl = document.getElementById('sentryStatusDetail');
+    const metaEl = document.getElementById('sentryStatusMeta');
+    const timeEl = document.getElementById('sentryStatusTime');
+    const iconEl = document.getElementById('sentryStatusIcon');
     const round = state.lastRound;
 
     let key = 'idle';
     let label = '等待巡检';
-    let detail = '布防后每轮巡检结束在此更新结论';
+    let detail = ROUND_META.idle.detail;
+    let meta = '哨兵未布防';
     let at = '--:--:--';
 
-    if (!state.armed) {
-        key = 'idle';
-        label = '已撤防';
-        detail = '开启哨兵后按间隔自动巡检并更新结论';
-    } else if (state.alarmActive) {
-        // 告警态优先：即使本轮恰好认出了已录入人员，也仍然显示报警
+    if (state.alarmActive) {
+        // 告警态优先：即使本轮恰好认出了已录入人员，也仍然显示告警
         key = 'alarm';
-        label = '报警';
+        label = '告警';
         detail = (round && round.state === 'alarm' && round.detail)
             ? round.detail
-            : (state.streak > 0
-                ? `告警持续中 · 已连续 ${state.streak} 轮`
-                : '告警待处理，点右上角「解除告警」结束');
+            : '检测到未认证人员，等待处理';
         at = (round && round.at) || at;
+        meta = state.streak > 0
+            ? `告警持续中 · 已连续 ${state.streak} 轮发现未认证人员`
+            : '告警待处理，点右上角「解除告警」结束';
+    } else if (!state.armed) {
+        key = 'idle';
+        label = '已撤防';
+        detail = '开启哨兵后按间隔自动巡检，每轮结束在此更新状态';
+        meta = '摄像头巡检已停止';
     } else if (round) {
         key = round.state || 'clear';
-        label = round.label || (ROUND_META[key] || {}).label || '巡检结果';
-        detail = round.detail || (ROUND_META[key] || {}).detail || '';
+        const info = ROUND_META[key] || {};
+        label = info.label || round.label || '巡检结果';
+        detail = round.detail || info.detail || '';
         at = round.at || at;
+        meta = roundMetaText(round);
     } else {
         detail = '值守中，等待首轮巡检结果…';
+        meta = `每 ${state.interval} 秒巡检一次`;
     }
 
+    if (iconEl) iconEl.className = 'bi ' + ((ROUND_META[key] || {}).icon || 'bi-shield-slash');
     box.dataset.state = key;
     labelEl.textContent = label;
     detailEl.textContent = detail;
     detailEl.title = detail;
+    metaEl.textContent = meta;
+    // 没有本轮时间就别留着「--:--:--」，撤防时那一行会显得像坏掉
     timeEl.textContent = at;
+    timeEl.hidden = at === '--:--:--';
+
+    // 只有状态真的变了才弹一下，避免每 5 秒轮询都抖一次
+    if (box.dataset.lastKey !== key) {
+        box.dataset.lastKey = key;
+        labelEl.classList.remove('is-fresh');
+        void labelEl.offsetWidth;      // 强制重排，保证动画能重放
+        labelEl.classList.add('is-fresh');
+    }
+
+    renderRoundScale(key);
+    renderRoundStreak();
+}
+
+/** 底部四档分级条：只点亮当前状态，其余保持灰底 */
+function renderRoundScale(key) {
+    document.querySelectorAll('#sentryStatusScale .sentry-scale-item').forEach((el) => {
+        el.classList.toggle('is-active', el.dataset.level === key);
+    });
+}
+
+/** 轮次进度：观察中显示第 N/3 轮，已告警则全部点亮 */
+function renderRoundStreak() {
+    const box = document.getElementById('sentryStreak');
+    if (!box) return;
+
+    const total = state.alarmRounds || 3;
+    const visible = state.armed && (state.alarmActive || state.streak > 0);
+    box.hidden = !visible;
+    if (!visible) return;
+
+    const streak = state.streak || 0;
+    const textEl = document.getElementById('sentryStreakText');
+    const dotsEl = document.getElementById('sentryStreakDots');
+
+    // 告警可能来自轮次累积，也可能由「模拟入侵」直接触发（streak 为 0），
+    // 后者不能编一个「连续 N 轮」出来
+    if (state.alarmActive) {
+        textEl.textContent = streak > 0 ? `告警中 · 连续 ${streak} 轮` : '已触发告警';
+    } else {
+        textEl.textContent = `观察中 · 第 ${streak}/${total} 轮`;
+    }
+
+    const filled = Math.min(total, streak);
+    dotsEl.innerHTML = filled > 0
+        ? Array.from({ length: total }, (_, i) =>
+            `<span class="sentry-streak-dot${i < filled ? ' on' : ''}"></span>`).join('')
+        : '';
+}
+
+/** 面板底部信息行：来源 · 人数 · 姓名 · 累计轮次 */
+function roundMetaText(round) {
+    const bits = [];
+    const source = SOURCE_META[round.source];
+    if (source) bits.push(source);
+
+    if (typeof round.persons === 'number') {
+        bits.push(round.persons > 0 ? `画面内 ${round.persons} 人` : '画面内无人');
+    }
+    if (round.person_name) bits.push(`识别为 ${round.person_name}`);
+    if (state.patrolCount > 0) bits.push(`累计第 ${state.patrolCount} 轮`);
+
+    return bits.join(' · ') || '--';
 }
 
 async function handleToggle(event) {

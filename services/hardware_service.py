@@ -219,6 +219,35 @@ class HardwareService:
             sender = lambda: bridge.send('LAMP', 0)
         return self._command('LAMP', sender, bridge=bridge)
 
+    def show_message(self, text, expect_reply=True):
+        """
+        在环境板 OLED 上临时显示一段文字，固件 3 秒后自动翻回温湿度页。
+
+        协议：MSG <文本> -> @ACK MSG <停留毫秒>；'|' 分隔最多 3 行，单行 21 字符。
+        只认 ASCII（6x12_tr 没有中文字模），非 ASCII 会在串口层被丢掉。
+
+        为什么默认 expect_reply=True 而哨兵里传 False：
+        手动调用想知道「到底送到没有」；哨兵在巡检线程里触发，为一条提示
+        等 300ms 回执不值得，写出去就算数。
+        """
+        bridge = self.env_bridge
+        if bridge is None:
+            return self._skipped('环境板未连接')
+        if not self._env_capable():
+            return self._skipped('环境板固件不支持 MSG 命令')
+
+        # 连续空白压成一个空格：换行符进不了单行命令，留着只会让固件收到坏行
+        text = ' '.join(str(text or '').split())
+        if not text:
+            return self._skipped('消息为空')
+        text = text[:60]
+
+        return self._command(
+            'MSG',
+            lambda: bridge.send('MSG', text, expect_reply=expect_reply),
+            bridge=bridge,
+        )
+
     def _env_capable(self):
         """
         环境板固件是否支持 FAN/LAMP（只认打过 @BOOT 1 的新固件）。

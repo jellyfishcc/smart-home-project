@@ -718,95 +718,330 @@ input:checked + .slider:before {
     color: var(--color-text);
 }
 
-/* 每轮巡检结论条：无人 / 未识别人员活动 / 已录入人脸 / 报警 */
-.sentry-round {
-    flex: 1 0 100%;
+/* 本轮巡检状态面板：无人 / 有已认证人员 / 未认证人员活动 / 告警
+   四态各自一套主色，靠 data-state 上的 --st / --st-soft 变量驱动，
+   避免为每个状态重复写一遍图标、边框、标签的配色。 */
+.sentry-status {
+    --st: #A8A29B;
+    --st-ink: #7A7368;
+    --st-soft: rgba(168, 162, 155, 0.13);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-bottom: 20px;
+    padding: 18px 20px 16px;
+    border: 1px solid var(--color-border);
+    border-left: 5px solid var(--st);
+    border-radius: var(--radius);
+    background: linear-gradient(118deg, var(--st-soft) 0%, #FFFFFF 56%);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+    transition: background 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease;
+}
+
+.sentry-status[data-state="clear"] {
+    --st: var(--color-success);
+    --st-ink: #3F7A4C;
+    --st-soft: rgba(107, 170, 117, 0.13);
+}
+
+.sentry-status[data-state="authorized"] {
+    --st: var(--color-info);
+    --st-ink: #3E6E8A;
+    --st-soft: rgba(106, 156, 184, 0.14);
+}
+
+.sentry-status[data-state="activity"] {
+    --st: var(--color-warning);
+    --st-ink: #A9721A;
+    --st-soft: rgba(233, 180, 85, 0.18);
+}
+
+.sentry-status[data-state="alarm"] {
+    --st: var(--color-danger);
+    --st-ink: #B94A4A;
+    --st-soft: rgba(224, 122, 122, 0.18);
+    border-color: rgba(224, 122, 122, 0.55);
+    animation: sentry-status-glow 1.8s ease-in-out infinite;
+}
+
+.sentry-status[data-state="unavailable"] {
+    --st: #A8A29B;
+    --st-ink: #7A7368;
+    --st-soft: rgba(138, 138, 138, 0.1);
+}
+
+@keyframes sentry-status-glow {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(224, 122, 122, 0), var(--shadow-sm);
+    }
+    50% {
+        box-shadow: 0 0 0 5px rgba(224, 122, 122, 0.1), 0 6px 22px rgba(224, 122, 122, 0.2);
+    }
+}
+
+.sentry-status-main {
     display: flex;
     align-items: center;
-    gap: 10px;
-    min-width: 0;
-    padding: 10px 14px;
-    border: 1px solid var(--color-border);
-    border-left: 3px solid var(--color-text-light);
-    border-radius: var(--radius-sm);
-    background: var(--color-bg);
-    font-size: 13px;
-    color: var(--color-text);
-    transition: var(--transition);
+    gap: 16px;
 }
 
-.sentry-round-dot {
-    width: 9px;
-    height: 9px;
+/* 大圆图标：状态色 + 软底 + 内白描边，屏幕上第一眼看到的就是它 */
+.sentry-status-icon {
+    position: relative;
     flex-shrink: 0;
+    width: 62px;
+    height: 62px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     border-radius: 50%;
-    background: var(--color-text-light);
+    font-size: 28px;
+    line-height: 1;
+    color: var(--st);
+    background: var(--st-soft);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.85), 0 2px 12px rgba(90, 122, 155, 0.1);
 }
 
-.sentry-round-label {
-    flex-shrink: 0;
-    font-weight: 600;
+/* 活动 / 告警：图标外圈扩散波纹，提示「正在发生」 */
+.sentry-status[data-state="activity"] .sentry-status-icon::after,
+.sentry-status[data-state="alarm"] .sentry-status-icon::after {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    border: 2px solid var(--st);
+    opacity: 0;
+    animation: sentry-icon-ring 1.8s ease-out infinite;
 }
 
-.sentry-round-detail {
+.sentry-status[data-state="alarm"] .sentry-status-icon::after {
+    animation-duration: 1.1s;
+}
+
+@keyframes sentry-icon-ring {
+    0% {
+        transform: scale(0.86);
+        opacity: 0.55;
+    }
+    100% {
+        transform: scale(1.16);
+        opacity: 0;
+    }
+}
+
+.sentry-status-body {
+    flex: 1;
     min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+}
+
+.sentry-status-kicker {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.4px;
     color: var(--color-text-light);
 }
 
-.sentry-round-time {
-    margin-left: auto;
-    flex-shrink: 0;
+.sentry-status-time {
+    font-weight: 500;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.sentry-status-time::before {
+    content: '·';
+    margin-right: 8px;
+    opacity: 0.6;
+}
+
+.sentry-status-label {
+    margin-top: 3px;
+    font-size: 27px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0.5px;
+    color: var(--st-ink);
+    transform-origin: left center;
+}
+
+.sentry-status-label.is-fresh {
+    animation: sentry-label-pop 0.45s ease;
+}
+
+@keyframes sentry-label-pop {
+    0% {
+        transform: scale(0.88);
+        opacity: 0.35;
+    }
+    60% {
+        transform: scale(1.03);
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.sentry-status-detail {
+    margin-top: 3px;
+    font-size: 13px;
+    color: var(--color-text);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.sentry-status-meta {
+    margin-top: 5px;
+    font-size: 11.5px;
     color: var(--color-text-light);
     font-variant-numeric: tabular-nums;
 }
 
-.sentry-round[data-state="clear"] {
-    border-left-color: var(--color-success);
-}
-.sentry-round[data-state="clear"] .sentry-round-dot {
-    background: var(--color-success);
-}
-
-.sentry-round[data-state="authorized"] {
-    border-left-color: var(--color-info);
-    background: rgba(106, 156, 184, 0.08);
-}
-.sentry-round[data-state="authorized"] .sentry-round-dot {
-    background: var(--color-info);
-}
-.sentry-round[data-state="authorized"] .sentry-round-label {
-    color: var(--color-info);
+.sentry-status-side {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
 }
 
-.sentry-round[data-state="activity"] {
-    border-left-color: var(--color-warning);
-    background: rgba(233, 180, 85, 0.1);
-}
-.sentry-round[data-state="activity"] .sentry-round-dot {
-    background: var(--color-warning);
-}
-.sentry-round[data-state="activity"] .sentry-round-label {
-    color: #B07C1E;
-}
-
-.sentry-round[data-state="alarm"] {
-    border-left-color: var(--color-danger);
-    background: rgba(224, 122, 122, 0.1);
-}
-.sentry-round[data-state="alarm"] .sentry-round-dot {
-    background: var(--color-danger);
-    animation: pulse 1.2s ease-in-out infinite;
-}
-.sentry-round[data-state="alarm"] .sentry-round-label {
-    color: var(--color-danger);
+/* 轮次进度：观察中显示第 N/3 轮，告警时全亮 */
+.sentry-streak {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 7px;
+    padding: 9px 13px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.78);
 }
 
-.sentry-round[data-state="unavailable"] {
-    border-left-color: var(--color-text-light);
-    background: rgba(138, 138, 138, 0.08);
+/* display:flex 会盖掉 [hidden] 自带的 display:none，必须显式收回 */
+.sentry-streak[hidden] {
+    display: none;
+}
+
+.sentry-streak-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--st-ink);
+    white-space: nowrap;
+}
+
+.sentry-streak-dots {
+    display: flex;
+    gap: 6px;
+}
+
+.sentry-streak-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: rgba(58, 58, 58, 0.13);
+    transition: var(--transition);
+}
+
+.sentry-streak-dot.on {
+    background: var(--st);
+    box-shadow: 0 0 0 3px var(--st-soft);
+}
+
+/* 四态分级条：把「状态机」摊开给用户看，当前档位整颗点亮 */
+.sentry-status-scale {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.sentry-scale-item {
+    --lv: #A8A29B;
+    --lv-soft: rgba(168, 162, 155, 0.13);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-width: 0;
+    padding: 9px 8px;
+    border: 1px dashed var(--color-border);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.62);
+    font-size: 12.5px;
+    color: var(--color-text-light);
+    white-space: nowrap;
+    transition: var(--transition);
+}
+
+.sentry-scale-item > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sentry-scale-item > i {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.sentry-scale-item[data-level="clear"] {
+    --lv: var(--color-success);
+    --lv-soft: rgba(107, 170, 117, 0.15);
+}
+
+.sentry-scale-item[data-level="authorized"] {
+    --lv: var(--color-info);
+    --lv-soft: rgba(106, 156, 184, 0.15);
+}
+
+.sentry-scale-item[data-level="activity"] {
+    --lv: var(--color-warning);
+    --lv-soft: rgba(233, 180, 85, 0.18);
+}
+
+.sentry-scale-item[data-level="alarm"] {
+    --lv: var(--color-danger);
+    --lv-soft: rgba(224, 122, 122, 0.16);
+}
+
+.sentry-scale-item.is-active {
+    color: var(--lv);
+    font-weight: 700;
+    border-style: solid;
+    border-color: var(--lv);
+    background: var(--lv-soft);
+    box-shadow: 0 3px 12px var(--lv-soft);
+}
+
+.sentry-status[data-state="unavailable"] .sentry-scale-item.is-active {
+    color: var(--color-text);
+    border-color: var(--color-text-light);
+}
+
+@media (max-width: 768px) {
+    .sentry-status-main {
+        flex-wrap: wrap;
+    }
+
+    .sentry-status-label {
+        font-size: 22px;
+    }
+
+    .sentry-status-side {
+        width: 100%;
+        align-items: flex-start;
+        padding-left: 78px;
+    }
+
+    .sentry-streak {
+        align-items: flex-start;
+    }
+
+    .sentry-status-scale {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 .sentry-layout {

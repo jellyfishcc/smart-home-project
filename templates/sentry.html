@@ -16,7 +16,7 @@
         <button class="btn btn-sm btn-danger" id="sentrySimulateBtn" title="注入一次入侵，用于现场演示">
             <i class="bi bi-exclamation-triangle"></i> 模拟入侵
         </button>
-        <button class="btn btn-sm btn-outline" id="sentryClearAlarmBtn" title="解除当前告警并恢复灯光，哨兵继续值守">
+        <button class="btn btn-sm btn-outline" id="sentryClearAlarmBtn" title="解除当前告警，哨兵继续值守">
             <i class="bi bi-shield-check"></i> 解除告警
         </button>
     </div>
@@ -49,12 +49,43 @@
         </div>
     </div>
 
-    <!-- 每轮巡检结论：无人 / 未识别人员活动 / 已录入人脸 / 报警 -->
-    <div class="sentry-round" id="sentryRound" data-state="idle">
-        <span class="sentry-round-dot"></span>
-        <strong class="sentry-round-label" id="sentryRoundLabel">等待巡检</strong>
-        <span class="sentry-round-detail" id="sentryRoundDetail">布防后每轮巡检结束在此更新结论</span>
-        <span class="sentry-round-time" id="sentryRoundTime">--:--:--</span>
+</div>
+
+<!-- 本轮巡检状态：无人 / 有已认证人员 / 未认证人员活动 / 告警 -->
+<div class="sentry-status" id="sentryStatus" data-state="idle">
+    <div class="sentry-status-main">
+        <div class="sentry-status-icon">
+            <i class="bi bi-shield-slash" id="sentryStatusIcon"></i>
+        </div>
+        <div class="sentry-status-body">
+            <div class="sentry-status-kicker">
+                本轮巡检状态
+                <span class="sentry-status-time" id="sentryStatusTime">--:--:--</span>
+            </div>
+            <div class="sentry-status-label" id="sentryStatusLabel">等待巡检</div>
+            <div class="sentry-status-detail" id="sentryStatusDetail">布防后每轮巡检结束在此更新结论</div>
+            <div class="sentry-status-meta" id="sentryStatusMeta">哨兵未布防</div>
+        </div>
+        <div class="sentry-status-side">
+            <div class="sentry-streak" id="sentryStreak" hidden>
+                <span class="sentry-streak-text" id="sentryStreakText">观察中</span>
+                <div class="sentry-streak-dots" id="sentryStreakDots"></div>
+            </div>
+        </div>
+    </div>
+    <div class="sentry-status-scale" id="sentryStatusScale">
+        <div class="sentry-scale-item" data-level="clear">
+            <i class="bi bi-shield-check"></i><span>无人</span>
+        </div>
+        <div class="sentry-scale-item" data-level="authorized">
+            <i class="bi bi-person-check"></i><span>有已认证人员</span>
+        </div>
+        <div class="sentry-scale-item" data-level="activity">
+            <i class="bi bi-person-exclamation"></i><span>未认证人员活动</span>
+        </div>
+        <div class="sentry-scale-item" data-level="alarm">
+            <i class="bi bi-exclamation-triangle"></i><span>告警</span>
+        </div>
     </div>
 </div>
 

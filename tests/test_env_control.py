@@ -33,6 +33,7 @@ class FakeEnvBridge:
 
     def __init__(self, protocol='1', boot_count=1):
         self.cmds = []
+        self.kwargs = []
         self._protocol = protocol
         self._boot_count = boot_count
 
@@ -41,6 +42,7 @@ class FakeEnvBridge:
 
     def send(self, name, *args, **kwargs):
         self.cmds.append((name,) + args)
+        self.kwargs.append(kwargs)
         return FakeResult()
 
 
@@ -151,6 +153,61 @@ class EnvCommandTest(unittest.TestCase):
     def test_missing_env_bridge_is_skipped(self):
         service = _service()
         self.assertTrue(service.set_lamp(True, 50).get('skipped'))
+
+
+class OledMessageTest(unittest.TestCase):
+    """OLED 临时消息：MSG <文本>，固件 3 秒后自动恢复常驻页"""
+
+    def test_message_is_sent_as_one_command(self):
+        bridge = FakeEnvBridge()
+        service = _service(bridge)
+
+        result = service.show_message('!! ALERT !!|INTRUDER', expect_reply=False)
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(bridge.cmds, [('MSG', '!! ALERT !!|INTRUDER')])
+
+    def test_fire_and_forget_skips_ack_wait(self):
+        """哨兵线程不该为一条提示等 300ms 回执"""
+        bridge = FakeEnvBridge()
+        service = _service(bridge)
+
+        service.show_message('ALERT', expect_reply=False)
+
+        self.assertFalse(bridge.kwargs[0].get('expect_reply', True))
+
+    def test_default_waits_for_ack(self):
+        bridge = FakeEnvBridge()
+        service = _service(bridge)
+
+        service.show_message('ALERT')
+
+        self.assertTrue(bridge.kwargs[0].get('expect_reply', True))
+
+    def test_whitespace_is_collapsed_and_text_truncated(self):
+        """换行会在固件里被当行尾，压成空格才不会把一条命令拆成两条"""
+        bridge = FakeEnvBridge()
+        service = _service(bridge)
+
+        service.show_message('A\nB\t C')
+        service.show_message('X' * 100)
+
+        self.assertEqual(bridge.cmds[0], ('MSG', 'A B C'))
+        self.assertLessEqual(len(bridge.cmds[1][1]), 60)
+
+    def test_empty_message_is_skipped(self):
+        bridge = FakeEnvBridge()
+        service = _service(bridge)
+
+        self.assertTrue(service.show_message('   ').get('skipped'))
+        self.assertEqual(bridge.cmds, [])
+
+    def test_legacy_env_firmware_is_skipped(self):
+        bridge = FakeEnvBridge(protocol='legacy', boot_count=1)
+        service = _service(bridge)
+
+        self.assertTrue(service.show_message('ALERT').get('skipped'))
+        self.assertEqual(bridge.cmds, [])
 
 
 class EnvReadbackTest(unittest.TestCase):

@@ -115,6 +115,8 @@ atexit.register(sentry_service.shutdown)
 hardware_service.init_app(app)
 hardware_service.set_socketio(socketio)
 hardware_service.set_device_manager(device_manager)
+# 哨兵告警时把提示推到环境板 OLED（没插板时 show_message 自己会跳过）
+sentry_service.set_hardware_service(hardware_service)
 atexit.register(hardware_service.shutdown)
 
 if config.SERIAL_ENABLED or config.SERIAL_ENV_ENABLED:

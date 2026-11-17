@@ -115,7 +115,8 @@ bool oldFan=false;
 //   所以这里只读 temperature / humidity 这两个已经被 readDHT() 更新好的全局量，
 //   回执不到 1ms 就发完，完全不碰传感器时序、引脚和舵机/风扇逻辑。
 
-#define CMD_BUF_SIZE 16
+// 64 字节留给 MSG 的文本，剩下的给命令字和参数
+#define CMD_BUF_SIZE 72
 
 char cmdBuf[CMD_BUF_SIZE];
 
@@ -123,6 +124,31 @@ uint8_t cmdLen=0;
 
 // readDHT() 读到有效值时置 true；false 表示温湿度还是上电默认值
 bool dhtOk=false;
+
+
+//================ OLED 临时消息（新增） ================
+//
+// 契约：MSG <文本>  -> @ACK MSG <停留毫秒>
+//       MSG          -> 立刻恢复常驻页，@ACK MSG 0
+//
+// 文本用 '|' 分隔，最多 3 行，黑底白字、整体垂直居中。
+// 只认可打印 ASCII —— 6x12_tr 没有中文字模，发中文只会显示空白。
+//
+// 为什么必须自带超时：
+//   OLED 的常驻职责是显示温湿度，告警页只是临时占用；上位机解除告警时
+//   可能根本来不及发第二条命令（进程被杀、串口掉了），所以由板子自己
+//   在 3 秒后回到常驻页，不依赖上位机的 CLEAR。
+
+#define MSG_BUF_SIZE 64
+
+// 消息停留时长：到期自动恢复常驻页
+#define MSG_HOLD_MS 3000UL
+
+char msgText[MSG_BUF_SIZE];
+
+bool msgActive=false;
+
+unsigned long msgUntil=0;
 
 
 //================ 手动控制 FAN / LAMP（新增） ================
@@ -144,6 +170,8 @@ bool dhtOk=false;
 //   FAN 1 / FAN 0           -> @ACK FAN <1|0>
 //   LAMP 1 60 / LAMP 0      -> @ACK LAMP <1|0> <亮度 0~100>
 //   LAMP AUTO               -> @ACK LAMP AUTO          （显式交还）
+//   MSG ALERT|INTRUDER      -> @ACK MSG 3000           （OLED 临时页，3 秒后自动恢复）
+//   MSG                     -> @ACK MSG 0              （立即恢复）
 //   交还或自治改了状态      -> @EVT CTL AUTO <FAN|LAMP> / @EVT FAN ON|OFF / @EVT LAMP ON|OFF <亮度>
 
 // 手动接管标志：true = 这个执行器归上位机管，自治逻辑不要动它
@@ -462,6 +490,44 @@ void handleCmd(const char* cmd)
     }
   }
 
+  else if(!strncmp(cmd,"MSG",3)&&(cmd[3]=='\0'||cmd[3]==' '))
+  {
+    const char* text=cmd+3;
+
+    while(*text==' ')
+    {
+      text++;
+    }
+
+    // 空文本 = 提前恢复，给上位机留一个显式撤销的口子
+    if(*text=='\0')
+    {
+      msgActive=false;
+
+      displayOLED();
+
+      Serial.println(F("@ACK MSG 0"));
+
+      return;
+    }
+
+    // 截断也要留结尾 0：strncpy 不补 '\0'，直接打印会越界读后面内存
+    strncpy(msgText,text,MSG_BUF_SIZE-1);
+
+    msgText[MSG_BUF_SIZE-1]='\0';
+
+    msgUntil=millis()+MSG_HOLD_MS;
+
+    msgActive=true;
+
+    // 立刻画一帧：等 2 秒的常驻刷新再画，3 秒停留就只剩 1 秒了
+    displayOLED();
+
+    Serial.print(F("@ACK MSG "));
+
+    Serial.println(MSG_HOLD_MS);
+  }
+
   else if(isCmdToken(cmd))
   {
     Serial.print(F("@NAK "));
@@ -637,7 +703,10 @@ reportStates();
 
 
 
-if(millis()-oledTimer>2000)
+// 有临时消息时 200ms 一帧（倒计时条才是连续的），常驻页 2s 一帧足够
+unsigned long oledPeriod=msgActive?200UL:2000UL;
+
+if(millis()-oledTimer>oledPeriod)
 {
 
 displayOLED();
@@ -804,12 +873,8 @@ applyLamp(darkState,lampLevel);
 //================ OLED显示 =================
 
 
-void displayOLED()
-{
-
-oled.firstPage();
-
-do
+// 常驻页：温湿度 + 风扇。只在没有临时消息时出现
+void drawStatus()
 {
 
 oled.setFont(u8g2_font_6x12_tr);
@@ -841,6 +906,124 @@ oled.print("ON");
 else
 oled.print("OFF");
 
+}
+
+
+// 临时消息页：黑底白字，最多 3 行，整体垂直居中，底部一条细的剩余时间条。
+// 刻意不做反白标题块——满屏白块要点亮上千个像素，既费电又容易留残影。
+void drawMsg()
+{
+
+long remain=(long)(msgUntil-millis());
+
+if(remain<0)
+{
+remain=0;
+}
+
+
+oled.setFont(u8g2_font_6x12_tr);
+
+
+// 先数行数，再定起始基线：1 行居中 36，2 行 28/44，3 行 20/36/52
+uint8_t lines=1;
+
+for(const char* q=msgText;*q;q++)
+{
+if(*q=='|')
+{
+lines++;
+}
+}
+
+if(lines>3)
+{
+lines=3;
+}
+
+
+uint8_t y=(uint8_t)(36-((lines-1)*8));
+
+
+const char* p=msgText;
+
+uint8_t line=0;
+
+while(*p&&line<3)
+{
+
+char buf[22];
+
+uint8_t n=0;
+
+while(*p&&*p!='|'&&n<21)
+{
+buf[n++]=*p++;
+}
+
+buf[n]='\0';
+
+if(*p=='|')
+{
+p++;
+}
+
+
+uint8_t w=(uint8_t)oled.getStrWidth(buf);
+
+oled.drawStr((w<128)?(uint8_t)((128-w)/2):0,y,buf);
+
+
+y+=16;
+
+line++;
+
+if(!*p)
+{
+break;
+}
+
+}
+
+
+// 3 秒倒计时条：1px 细框 + 3px 填充，亮起的像素约 350 个，
+// 比原来那条 128x15 的反白块（约 1920 个）少一个量级
+uint8_t bar=(uint8_t)((remain*116L)/MSG_HOLD_MS);
+
+oled.drawFrame(4,57,120,5);
+
+if(bar>0)
+{
+oled.drawBox(5,58,(bar>116)?116:bar,3);
+}
+
+}
+
+
+// 分派：临时消息到期就地翻回常驻页，不需要上位机再发命令
+void displayOLED()
+{
+
+if(msgActive&&(long)(millis()-msgUntil)>=0)
+{
+msgActive=false;
+}
+
+
+oled.firstPage();
+
+do
+{
+
+if(msgActive)
+{
+drawMsg();
+}
+
+else
+{
+drawStatus();
+}
 
 }
 while(oled.nextPage());

@@ -259,7 +259,12 @@ class DeviceManager:
                 return self.set_device('ac', 'on', source=source)
 
     def auto_fan_control(self, temperature, threshold=28.0):
-        """自动风扇控制：温度超过阈值时自动开启风扇"""
+        """按温度阈值自动开关风扇。
+
+        注意：**当前没有自动调用方**。温度→风扇的联动在环境板固件里用
+        真实 DHT11 完成（30 开 / 28 关）；软件侧不再用模拟温度驱动执行器，
+        否则页面上的假温度会让风扇自己开关。此方法仅供显式调用保留。
+        """
         if temperature > threshold:
             if not self._state['fan']['on']:
                 self.set_device('fan', 'on', value=2, source='auto')

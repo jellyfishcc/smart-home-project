@@ -78,16 +78,15 @@ class SensorSimulator:
                 self._current_humidity = round(60 - (self._current_temp - 25) * 2 + random.uniform(-5, 5), 1)
                 self._current_humidity = max(30, min(80, self._current_humidity))
 
+                # 风扇不跟模拟温度走：模拟值在 20~33℃ 之间来回穿越阈值，
+                # 会让风扇凭空自己开关。温度→风扇的联动由环境板固件用真实
+                # DHT11 判断（30 开 / 28 关），软件只记录风扇当前是否在转。
+                fan_activated = self._fan_running()
+
                 # 记录到数据库
-                fan_activated = self._current_temp > self._temp_threshold
                 if self._db_logger:
                     with self._app.app_context():
                         self._db_logger(self._current_temp, self._current_humidity, fan_activated)
-
-                # 自动风扇控制
-                if self._device_manager:
-                    with self._app.app_context():
-                        self._device_manager.auto_fan_control(self._current_temp, self._temp_threshold)
 
                 # 推送实时数据
                 if self._socketio:
@@ -111,10 +110,24 @@ class SensorSimulator:
         return {
             'temperature': self._current_temp,
             'humidity': self._current_humidity,
-            'fan_activated': self._current_temp > self._temp_threshold,
+            'fan_activated': self._fan_running(),
             'threshold': self._temp_threshold,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
+
+    def _fan_running(self):
+        """风扇当前是否真的在转。
+
+        以设备状态为准，绝不拿温度阈值去推断——模拟温度只是给页面看的，
+        没有资格决定执行器状态；真实温控在环境板固件里按 DHT11 做。
+        """
+        dm = self._device_manager
+        if dm is None:
+            return False
+        try:
+            return bool((dm.get_device('fan') or {}).get('on'))
+        except Exception:
+            return False
 
     def set_temperature(self, temp):
         """手动设置温度（用于测试）"""
@@ -126,12 +139,11 @@ class SensorSimulator:
         if humidity is not None:
             self._current_humidity = round(float(humidity), 1)
 
-        fan_activated = self._current_temp > self._temp_threshold
+        # 注入的读数也不允许改风扇：真实数据只用来更新显示与日志
+        fan_activated = self._fan_running()
+
         if self._db_logger:
             self._db_logger(self._current_temp, self._current_humidity, fan_activated)
-
-        if self._device_manager:
-            self._device_manager.auto_fan_control(self._current_temp, self._temp_threshold)
 
         if self._socketio:
             self._socketio.emit('sensor_update', {

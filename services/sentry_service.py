@@ -4,8 +4,11 @@
 职责：
   1. 维护布防状态机 disarmed / arming / armed
   2. 后台线程按固定节奏巡检：抓帧 -> 人形检测 -> 人脸核验 -> 判定
-  3. 发现未授权人员时留证（连拍）+ 写事件 + WebSocket 推送 + 联动灯光
+  3. 发现未授权人员时留证（连拍）+ 写事件 + WebSocket 推送 + 环境板 OLED 提示
   4. 提供手动巡检与模拟入侵入口，供课程现场演示
+
+约束：告警只做「留证 + 通知」，不改动灯光/风扇等设备状态——
+避免安防逻辑和日常照明互相打架。
 
 设计约束（与项目现状强相关）：
   - 摄像头是独占资源，巡检**必须**复用 services.camera_stream 的常驻采集，
@@ -48,6 +51,7 @@ class SentryService:
         self._device_manager = None
         self._face_service = None
         self._camera = None
+        self._hardware = None
 
         self._lock = threading.RLock()
         self._wake = threading.Event()
@@ -70,7 +74,7 @@ class SentryService:
         self._no_frame_streak = 0
         self._last_error: str | None = None
         self._camera_state = 'unknown'    # unknown / ok / dark / unavailable
-        # 最近一轮巡检结论：哨兵页面据此显示 无人 / 未识别人员活动 / 已录入人脸 / 报警
+        # 最近一轮巡检结论：哨兵页面据此显示 无人 / 未认证人员活动 / 有已认证人员 / 告警
         self._last_round: dict | None = None
 
         # 轨迹累积：连续 N 轮出现未授权人员才升级为告警。
@@ -81,8 +85,6 @@ class SentryService:
         self._alarm_since: datetime | None = None
         # 未告警时的留证滚动窗口：每项是一轮连拍的相对路径列表
         self._recent_rounds: deque[list[str]] = deque()
-        # 告警前灯光的原始状态，解除告警时恢复
-        self._light_before: dict | None = None
 
         # 模型惰性加载，避免拖慢应用启动
         self._model = None
@@ -106,6 +108,10 @@ class SentryService:
 
     def set_camera_stream(self, camera_stream):
         self._camera = camera_stream
+
+    def set_hardware_service(self, hardware_service):
+        """硬件对接层（可选）。告警时用它把提示推给环境板 OLED。"""
+        self._hardware = hardware_service
 
     # ------------------------------------------------------------------ 生命周期
 
@@ -273,11 +279,11 @@ class SentryService:
             return 'unavailable', '画面异常', result.get('reason') or '本轮未取到有效画面'
 
         if result.get('alarm'):
-            return 'alarm', '报警', result.get('reason') or '检测到未授权人员'
+            return 'alarm', '告警', result.get('reason') or '检测到未授权人员'
 
         if result.get('recognized'):
             name = result.get('person_name') or '授权人员'
-            return 'authorized', '检测到已录入人脸', f'{name}，正常放行'
+            return 'authorized', '有已认证人员', f'{name}，正常放行'
 
         if int(result.get('persons') or 0) > 0:
             total = config.SENTRY_ALARM_ROUNDS
@@ -286,7 +292,7 @@ class SentryService:
             # 未授权的 reason 自带「（第 2/3 轮观察）」，别重复拼轮次
             if round_no and '轮' not in detail:
                 detail = f'第 {round_no}/{total} 轮 · {detail}'
-            return 'activity', '有未识别人员活动', detail
+            return 'activity', '未认证人员活动', detail
 
         reason = result.get('reason') or ''
         if '画面过暗' in reason:
@@ -548,7 +554,7 @@ class SentryService:
             'channel': 'CAM-01 门口',
             'rounds': rounds,
         })
-        self._flash_light()
+        self._show_alarm_message()
         logger.warning('[Sentry] 升级为告警：%s，连续 %s 轮', reason, rounds)
         return payload
 
@@ -652,10 +658,10 @@ class SentryService:
     # ------------------------------------------------------------------ 手动解除
 
     def clear_alarm(self, operator='developer', reason='手动解除'):
-        """开发者手动解除告警：归档事件、清零轨迹、恢复灯光。
+        """开发者手动解除告警：归档事件、清零轨迹。
 
         与 `stop()` 的区别：撤防是关闭哨兵，这个是「这件事我已经处理完了」，
-        哨兵保持布防继续值守。
+        哨兵保持布防继续值守。告警期间没有改动过灯光，所以这里也不需要恢复。
         """
         with self._lock:
             event_id = self._active_event_id
@@ -681,7 +687,6 @@ class SentryService:
                     event.handled_at = datetime.now()
                     event.detail = f'{reason}（共 {rounds} 轮）'
                     db.session.commit()
-        self._restore_light()
         self._emit('sentry_alarm_cleared', {
             'event_id': event_id, 'rounds': rounds, 'operator': operator,
         })
@@ -957,51 +962,26 @@ class SentryService:
         }
         self._emit('sentry_alarm', payload)
 
-        # 联动：把灯推到最亮，作为「有人闯入」的现场反应
-        self._flash_light()
+        # 只推屏幕提示；不再动灯光（告警不该改变家里的照明状态）
+        self._show_alarm_message()
         logger.warning('[Sentry] 告警触发: %s (%s)', detail, event_type)
         return event
 
-    def _flash_light(self):
-        """联动灯光。必须包在 app_context 里：
+    def _show_alarm_message(self):
+        """告警时在环境板 OLED 上打一条提示，3 秒后由固件自己翻回温湿度页。
 
-        DeviceManager 本身只改内存状态，但它会回调 db_logger / lighting_logger
-        写 device_status_logs 与 lighting_records，两者都要 db.session；
-        而本方法运行在巡检子线程中，没有请求上下文，裸调用会抛
-        RuntimeError: Working outside of application context。
+        三个刻意的选择：
+          - expect_reply=False：这只是一条旁路提示，不该让巡检线程为回执
+            多等 300ms，更不该因为它超时影响告警主流程。
+          - 不写库、不碰 app_context：HardwareService 这一层只做串口转发。
+          - 文案固定且 ASCII：OLED 是 6x12 字库，中文会显示成空白。
         """
-        if self._device_manager is None or self._app is None:
+        if self._hardware is None:
             return
         try:
-            with self._app.app_context():
-                # 只在第一次告警前记下原状态，解除时恢复，避免被自己覆盖成 100%
-                if self._light_before is None:
-                    current = self._device_manager.get_device('light') or {}
-                    self._light_before = {
-                        'on': bool(current.get('on')),
-                        'brightness': int(current.get('brightness') or 0),
-                    }
-                self._device_manager.set_light_brightness(100, source='sentry')
+            self._hardware.show_message('WARNING', expect_reply=False)
         except Exception:
-            logger.exception('[Sentry] 联动灯光失败')
-
-    def _restore_light(self):
-        """解除告警时把灯光恢复成告警前的状态。"""
-        with self._lock:
-            before = self._light_before
-            self._light_before = None
-        if not before or self._device_manager is None or self._app is None:
-            return
-        try:
-            with self._app.app_context():
-                if before.get('on'):
-                    self._device_manager.set_light_brightness(
-                        int(before.get('brightness') or 50), source='sentry')
-                else:
-                    self._device_manager.set_device('light', 'off', source='sentry')
-            logger.info('[Sentry] 灯光已恢复: %s', before)
-        except Exception:
-            logger.exception('[Sentry] 恢复灯光失败')
+            logger.exception('[Sentry] OLED 告警提示失败')
 
     def _emit(self, event_name, payload):
         if self._socketio is None:

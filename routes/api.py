@@ -602,6 +602,28 @@ def get_hardware_status():
     return jsonify({'code': 0, 'message': 'success', 'data': hardware_service.status()})
 
 
+@api_bp.route('/hardware/message', methods=['POST'])
+def push_hardware_message():
+    """
+    在环境板 OLED 上临时显示一条提示。
+
+    停留时长由固件决定（3 秒），到点自己翻回温湿度页，调用方不需要清除。
+    文本用 '|' 分最多 3 行（换行符会折成 '|'），单行 21 个字符、只认 ASCII。
+    """
+    data = request.get_json(silent=True) or {}
+    text = str(data.get('text') or '').replace('\r', '').replace('\n', '|').strip()
+    if not text:
+        return jsonify({'code': 1, 'message': 'text 不能为空'}), 400
+
+    result = hardware_service.show_message(text)
+    ok = bool(result.get('ok'))
+    return jsonify({
+        'code': 0 if ok else 1,
+        'message': '已下发' if ok else (result.get('error') or '下发失败'),
+        'data': result,
+    })
+
+
 # ============================================================
 # 5. 传感器数据 API
 # ============================================================
@@ -1115,9 +1137,10 @@ def sentry_handle_event(event_id):
 
 @api_bp.route('/sentry/alarm/clear', methods=['POST'])
 def sentry_clear_alarm():
-    """开发者手动解除告警：归档事件、清零轨迹、恢复灯光，哨兵继续值守。
+    """开发者手动解除告警：归档事件、清零轨迹，哨兵继续值守。
 
     与 /disarm 的区别：撤防是关掉哨兵，这个只是「这件事处理完了」。
+    告警不改动灯光，所以这里也没有需要恢复的设备状态。
     """
     service = _sentry()
     if service is None:
