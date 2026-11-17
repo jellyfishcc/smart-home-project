@@ -192,6 +192,7 @@ class _RecordingDeviceManager:
 
     def __init__(self):
         self.calls = []
+        self.modes = []
         self._state = {
             'door': {'locked': True},
             'fan': {'on': False, 'speed': 0},
@@ -200,6 +201,10 @@ class _RecordingDeviceManager:
 
     def get_device(self, name):
         return dict(self._state.get(name, {}))
+
+    def set_control_mode(self, device, mode):
+        """板子自报的控制模式：只记下来，绝不能触发下发"""
+        self.modes.append((device, mode))
 
     def set_device(self, device, status, value=None, source='manual', **kwargs):
         self.calls.append((device, status, value, source))
@@ -238,6 +243,19 @@ class EnvIsolationTest(unittest.TestCase):
 
         self.assertEqual(dm.calls, [])
 
+    def test_boot_returns_control_mode_to_auto(self):
+        """复位后板子回到自治，页面的控制模式也要跟着回 auto，且不能下发命令"""
+        from services.hardware_service import HardwareService
+
+        service = HardwareService()
+        dm = _RecordingDeviceManager()
+        service.set_device_manager(dm)
+
+        service._on_env_event(Message('BOOT', '', ['1']))
+
+        self.assertEqual(dm.modes, [('fan', 'auto'), ('light', 'auto')])
+        self.assertEqual(dm.calls, [])
+
     def test_env_bridge_requires_explicit_port(self):
         """端口留空时绝不退回自动探测：否则会抢门禁板那条 COM"""
         from services.hardware_service import HardwareService
@@ -247,6 +265,25 @@ class EnvIsolationTest(unittest.TestCase):
             {'SERIAL_ENV_ENABLED': True, 'SERIAL_ENV_PORT': ''}))
         self.assertIsNone(service._start_env_bridge(
             {'SERIAL_ENV_ENABLED': False, 'SERIAL_ENV_PORT': 'COM4'}))
+        self.assertEqual(service.status()['error'],
+                         'environment_usb_serial_mapping_required')
+
+    def test_env_bridge_accepts_explicit_port_without_usb_serial(self):
+        """显式写了 COM 口也算给了身份，不该再被判成未配置"""
+        from unittest.mock import patch
+
+        from services.hardware_service import HardwareService
+
+        service = HardwareService()
+        with patch('services.hardware_service.SerialBridge') as bridge_cls:
+            bridge = service._start_env_bridge(
+                {'SERIAL_ENV_ENABLED': True, 'SERIAL_ENV_PORT': 'COM7'})
+        self.assertIs(bridge, bridge_cls.return_value)
+        bridge_cls.return_value.start.assert_called_once()
+        kwargs = bridge_cls.call_args.kwargs
+        self.assertEqual(kwargs['port'], 'COM7')
+        self.assertEqual(kwargs['usb_serial'], '')
+        self.assertIsNone(service.status()['error'])
 
 
 class EnvApplyTest(unittest.TestCase):

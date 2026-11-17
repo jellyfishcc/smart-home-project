@@ -120,17 +120,21 @@ class HardwareService:
         """
         环境板（UNO I）：独立一条串口，只收 @DATA ENV / @PONG，不参与门禁逻辑。
 
-        USB Serial Number 必须显式配置，不允许按设备节点顺序猜测角色。
+        身份必须显式给出，二选一：USB Serial Number（换 USB 口也不失效，优先）
+        或固定端口（如 start_hardware.bat 里的 COM7）。两者都为空时拒绝启动，
+        绝不按设备节点顺序或 VID 打分猜测角色 —— 两块板都是 2341:0043，
+        猜错就会把门禁板当环境板。
         """
         if not cfg.get('SERIAL_ENV_ENABLED'):
             return None
-        if not cfg.get('ENVIRONMENT_USB_SERIAL'):
+        usb_serial = (cfg.get('ENVIRONMENT_USB_SERIAL') or '').strip()
+        port = (cfg.get('SERIAL_ENV_PORT') or '').strip()
+        if not usb_serial and not port:
             self._startup_error = 'environment_usb_serial_mapping_required'
             return None
-        port = cfg.get('SERIAL_ENV_PORT', '')
         bridge = SerialBridge(
             port=port,
-            usb_serial=cfg.get('ENVIRONMENT_USB_SERIAL', ''),
+            usb_serial=usb_serial,
             baudrate=cfg.get('SERIAL_BAUD', 9600),
             cmd_timeout=cfg.get('SERIAL_CMD_TIMEOUT', 0.3),
             retries=cfg.get('SERIAL_CMD_RETRIES', 2),
@@ -346,6 +350,20 @@ class HardwareService:
 
         except Exception:
             logger.exception('[Hardware] 处理环境板事件失败: %s', msg)
+
+    def _sync_env_mode(self, device, mode):
+        """
+        环境板自报的控制模式（auto / manual），只更新软件侧展示。
+
+        这条路径的触发源是板子自己（@BOOT 复位、@EVT CTL），所以绝不能
+        再往下发命令，否则会形成「命令 -> @EVT -> 命令」的回环。
+        """
+        dm = self._device_manager
+        if dm is None:
+            return
+        setter = getattr(dm, 'set_control_mode', None)
+        if setter:
+            setter(device, mode)
 
     def _sync_env_state(self, fan=None, lamp=None, brightness=None, event_at=None):
         """

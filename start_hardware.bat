@@ -24,6 +24,14 @@ set SMART_HOME_SERIAL_PORT=COM8
 set SMART_HOME_SERIAL_ENV_ENABLED=1
 set SMART_HOME_SERIAL_ENV_PORT=COM7
 
+rem The two boards report the same VID/PID (2341:0043), so the USB serial
+rem number is the only reliable identity. When set, it wins over the COM name
+rem above, which means replugging into another USB port keeps working even
+rem though Windows renumbers COMx. Look the numbers up with:
+rem     venv\Scripts\python.exe scripts\serial_probe.py --list
+set SMART_HOME_DOOR_USB_SERIAL=3433031323135141F0D1
+set SMART_HOME_ENVIRONMENT_USB_SERIAL=24238313635351910130
+
 rem Windows has no /dev/videoN: use a numeric camera index (0 = default camera)
 if not defined SMART_HOME_CAMERA_INDEX set SMART_HOME_CAMERA_INDEX=0
 rem Clear any inherited Linux device path so the numeric index above takes effect
