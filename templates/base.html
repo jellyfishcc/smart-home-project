@@ -47,6 +47,7 @@
 
     <!-- 主内容区 -->
     <main class="main-content">
+        <div class="alert alert-info">环境数据源：{{ sensor_source | default('unknown') }}；历史按真实／模拟数据库隔离。门禁回执不代表位置到位。</div>
         {% block content %}{% endblock %}
     </main>
 

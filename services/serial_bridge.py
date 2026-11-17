@@ -24,9 +24,10 @@ UNOII 的串口接收是「攒满一行再整体字符串比较」，没有分�
 --------------------------
 UNO 的 USB 转串口芯片在串口被打开时会拉低 DTR，ATmega328P 因此自动复位，
 舵机回到 0°、固件重新打印启动横幅。所以每次连接成功都必须把 `@BOOT`
-（或旧固件的 `SmartHome Ready`）当成「门已关、所有待确认命令作废」的硬信号。
+（或旧固件的 `SmartHome Ready`）当成「位置未知、所有待确认命令作废」的信号。
 """
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -101,11 +102,12 @@ class CommandResult:
 
 class _Waiter:
     """一次命令的等待句柄，由读线程负责唤醒"""
-    __slots__ = ('event', 'message')
+    __slots__ = ('event', 'message', 'error')
 
     def __init__(self):
         self.event = threading.Event()
         self.message = None
+        self.error = ''
 
 
 # 旧固件（未加 @ 前缀）的裸文本 -> 归一化消息
@@ -165,6 +167,16 @@ def parse_line(line):
     return Message('LOG', '', [], line)
 
 
+def decode_env(args):
+    """Business reading, excluding invalid DHT reports; raw messages stay intact."""
+    if len(args) < 2 or (len(args) >= 3 and args[2] != '1'):
+        return None
+    try:
+        return (round(int(args[0]) / 10.0, 1), round(int(args[1]) / 10.0, 1))
+    except (ValueError, TypeError):
+        return None
+
+
 # ============================================================
 # 端口探测
 # ============================================================
@@ -185,6 +197,7 @@ def list_serial_ports():
             score += 5
         ports.append({
             'device': p.device,
+            'serial_number': p.serial_number,
             'description': desc,
             'hwid': hwid,
             'vid': p.vid,
@@ -193,6 +206,15 @@ def list_serial_ports():
         })
     ports.sort(key=lambda x: (-x['score'], x['device']))
     return ports
+
+
+def resolve_usb_serial(number):
+    if not number:
+        raise ValueError('usb_serial_mapping_required')
+    matches = [p['device'] for p in list_serial_ports() if p.get('serial_number') == number]
+    if len(matches) != 1:
+        raise ValueError('board_missing' if not matches else 'ambiguous_usb_serial')
+    return matches[0]
 
 
 def autodetect_port():
@@ -238,7 +260,10 @@ class SerialBridge:
                  rain_poll_interval: float = 30.0,
                  env_poll_interval: float = 0.0,
                  reconnect_delay: float = 2.0,
-                 read_timeout: float = 0.2):
+                 read_timeout: float = 0.2,
+                 usb_serial: str = ''):
+        self.usb_serial = usb_serial
+        self.last_error = None
         self.port = port
         self.baudrate = int(baudrate)
         self.cmd_timeout = float(cmd_timeout)
@@ -331,21 +356,25 @@ class SerialBridge:
     # ---------------- 对外命令 ----------------
 
     def _wait_boot(self):
-        """
-        打开串口会让板子复位，bootloader 阶段写进去的字节会被吞掉。
+        """Bounded transport wait, then boot_wait measured from actual open.
 
-        所以连上之后的第一条命令必须等到启动横幅（@BOOT / SmartHome Ready），
-        最多等 boot_wait 秒；等不到也照发，避免永远卡死。
+        Waiting is not a command attempt. A banner permits early readiness;
+        banner-less firmware falls back to boot_wait after the real open.
         """
-        if self._boot_seen or self.boot_wait <= 0:
-            return
-        deadline = self._opened_at + self.boot_wait
-        while not self._boot_seen and not self._stop.is_set():
-            remain = deadline - time.time()
-            if remain <= 0:
-                logger.debug('[Serial] 等待启动横幅超时，仍继续发送')
-                return
-            self._stop.wait(min(0.05, remain))
+        deadline = time.monotonic() + max(0, self.reconnect_delay) + max(0, self.boot_wait) + 1.0
+        while not self._stop.is_set():
+            with self._lock:
+                ser = self._serial
+                if ser is not None:
+                    if self._boot_seen or time.time() - self._opened_at >= self.boot_wait:
+                        return ser
+                elif not self._running:
+                    return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            self._stop.wait(min(0.01, remaining))
+        return None
 
     def send(self, name: str, *args, expect_reply: bool = True,
              timeout: Optional[float] = None, retries: Optional[int] = None):
@@ -353,15 +382,15 @@ class SerialBridge:
         发一条命令并等回执。返回 CommandResult，永远不抛异常。
 
         expect_reply=False 时写完立即返回，用于不需要回执的广播型命令。
-        注意：所有命令都必须是幂等的，因为超时会重发。
+        OPEN 永不重试；只有查询和幂等命令可以使用配置的重试次数。
         """
-        command = name.upper()
+        command = name.strip().upper()
+        if command == 'OPEN':
+            retries = 0  # Non-idempotent: force even if caller/global config asks for retries.
         # 只在「既没装 pyserial 又没有可用串口句柄」时报错，
         # 这样测试或自定义传输层可以注入 _serial 直接复用本层逻辑
         if self._serial is None and not PYSERIAL_AVAILABLE:
             return CommandResult(False, command, error='pyserial 未安装')
-
-        self._wait_boot()
 
         payload = ' '.join([command] + [str(a) for a in args]) + '\n'
         attempts = (self.retries if retries is None else max(0, int(retries))) + 1
@@ -374,24 +403,26 @@ class SerialBridge:
 
             # 写操作串行化，避免两条命令在固件的行缓冲里粘连
             with self._tx_lock:
-                with self._lock:
-                    if self._serial is None:
-                        return CommandResult(False, command, error='串口未连接',
-                                             attempts=attempt,
-                                             elapsed=time.time() - started)
-                    self._pending[command] = waiter
+                ser = self._wait_boot()
+                if ser is None:
+                    return CommandResult(False, command, error='transport_ready_timeout_or_stopped',
+                                         attempts=attempt - 1, elapsed=time.time() - started)
                 try:
-                    self._serial.write(payload.encode('ascii', errors='ignore'))
-                    self._serial.flush()
+                    # Register and write atomically relative to BOOT/disconnect handling.
                     with self._lock:
+                        if self._serial is not ser:
+                            return CommandResult(False, command, error='transport_changed_before_write',
+                                                 attempts=attempt - 1, elapsed=time.time() - started)
+                        self._pending[command] = waiter
+                        ser.write(payload.encode('ascii', errors='ignore'))
+                        ser.flush()
                         self._counters['tx_cmds'] += 1
                 except Exception as exc:
                     with self._lock:
                         self._pending.pop(command, None)
                     self._handle_disconnect(exc)
                     return CommandResult(False, command, error='写入失败: %s' % exc,
-                                         attempts=attempt,
-                                         elapsed=time.time() - started)
+                                         attempts=attempt, elapsed=time.time() - started)
 
                 if not expect_reply:
                     with self._lock:
@@ -404,7 +435,7 @@ class SerialBridge:
             if got:
                 msg = waiter.message
                 if msg is None:  # 等待期间连接断开
-                    return CommandResult(False, command, error='连接已断开',
+                    return CommandResult(False, command, error=waiter.error or '连接已断开',
                                          attempts=attempt,
                                          elapsed=time.time() - started)
                 ok = msg.kind != 'NAK'
@@ -416,7 +447,8 @@ class SerialBridge:
 
             last_error = '超时 %.0fms 未收到回执' % (timeout * 1000)
             with self._lock:
-                self._pending.pop(command, None)
+                if self._pending.get(command) is waiter:
+                    self._pending.pop(command, None)
                 self._counters['timeouts'] += 1
             if attempt < attempts:
                 logger.debug('[Serial] %s 第 %d 次超时，重试', command, attempt)
@@ -427,7 +459,7 @@ class SerialBridge:
 
     def open_door(self):
         """请求开门。注意 ok=True 只代表「固件受理了」，不代表门扇到位。"""
-        return self.send('OPEN')
+        return self.send('OPEN', retries=0)
 
     def close_door(self):
         """请求关门（需要固件支持 CLOSE；旧固件会返回超时）"""
@@ -459,14 +491,7 @@ class SerialBridge:
         result = self.send('QENV')
         if not result.ok or result.reply is None:
             return None
-        args = result.reply.args
-        if len(args) < 2:
-            return None
-        try:
-            return (round(int(args[0]) / 10.0, 1), round(int(args[1]) / 10.0, 1))
-        except ValueError:
-            logger.warning('[Serial] 环境数据格式不对: %s', args)
-            return None
+        return decode_env(result.reply.args)
 
     def query_env_raw(self):
         """查询环境板原始报文，返回 `@DATA ENV` 的整个 args 列表（含有效标志）"""
@@ -503,6 +528,8 @@ class SerialBridge:
                 'connected': self._connected,
                 'port': self._port_actual or self.port,
                 'baudrate': self.baudrate,
+                'usb_serial': self.usb_serial,
+                'error': self.last_error,
                 'protocol': self._proto_version or 'legacy',
                 'firmware': self._fw_version,
                 'boot_count': self._boot_count,
@@ -541,7 +568,12 @@ class SerialBridge:
                 pass
 
     def _try_open(self):
-        port = self.port or autodetect_port()
+        try:
+            # Linux roles must never fall back to port order/VID scoring.
+            port = resolve_usb_serial(self.usb_serial) if os.name != 'nt' or self.usb_serial else self.port
+        except Exception as exc:
+            self._note_open_failure(str(exc))
+            return False
         if not port:
             self._note_open_failure('未找到可用串口')
             return False
@@ -570,6 +602,7 @@ class SerialBridge:
             pass
 
         self._open_failures = 0
+        self.last_error = None
         with self._lock:
             self._serial = ser
             self._port_actual = port
@@ -590,11 +623,12 @@ class SerialBridge:
         没插板子是很常见的常态，首次和每 30 次（约 1 分钟）提示一次即可，
         其余降到 debug，避免把日志刷满。
         """
+        self.last_error = reason
         self._open_failures += 1
         if self._open_failures == 1 or self._open_failures % 30 == 0:
             logger.warning('[Serial] %s（第 %d 次尝试，%s）',
                            reason, self._open_failures,
-                           '可用 SMART_HOME_SERIAL_PORT 指定端口')
+                           '请检查 USB Serial Number 配置、设备枚举和权限')
         else:
             logger.debug('[Serial] %s（第 %d 次）', reason, self._open_failures)
 
@@ -638,13 +672,20 @@ class SerialBridge:
                 self._fw_version = msg.args[1] if len(msg.args) > 1 else ''
                 # 复位 = 板子回到了初始物理状态，之前的读数与意图全部作废
                 self._reported = {}
-                self._reported['door'] = 'CLOSED'
+                self._reported['door_command'] = 'reset'
+                self._reported['physical_position'] = 'unknown'
+                for waiter in self._pending.values():
+                    waiter.error = 'board_reset_command_interrupted'
+                    waiter.event.set()
+                self._pending.clear()
             elif msg.kind == 'EVT' and msg.name == 'DOOR':
                 self._reported['door'] = (msg.args[0].upper() if msg.args else 'UNKNOWN')
             elif msg.kind == 'DATA' and msg.name == 'RAIN':
                 self._reported['rain'] = (msg.args[0] == '1') if msg.args else None
             elif msg.kind == 'DATA' and msg.name == 'ENV':
-                self._reported['env'] = list(msg.args)
+                self._reported['env_raw'] = list(msg.args)
+                self._reported['env_valid'] = decode_env(msg.args) is not None
+                self._reported['env'] = list(msg.args) if self._reported['env_valid'] else None
 
     def _fulfill(self, msg):
         """把回执交给正在等待的命令；返回是否有人接"""
@@ -700,6 +741,7 @@ class SerialBridge:
             self._dispatch(Message('EVT', 'LINK', ['OFFLINE'], legacy=True))
 
     def _handle_disconnect(self, exc):
+        self.last_error = str(exc)
         with self._lock:
             ser, self._serial = self._serial, None
             was_connected = self._connected
@@ -750,7 +792,7 @@ class SerialBridge:
             # PING 只有升级过的新固件才认；旧固件收到一声不响，链路会被误判成离线。
             # QRAIN 新旧都认，所以「不确定对方是谁」时一律用它保活：
             # 既拿到回执证明链路活着，又顺带刷新雨滴状态。
-            keepalive = 'PING' if self._proto_version not in ('', 'legacy') else 'QRAIN'
+            keepalive = 'PING' if self._proto_version not in ('', 'legacy') else ('QENV' if self.env_poll_interval else 'QRAIN')
 
             now = time.time()
             if next_heartbeat and now >= next_heartbeat:

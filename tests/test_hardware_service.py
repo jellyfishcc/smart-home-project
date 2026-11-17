@@ -75,7 +75,7 @@ class DeviceManagerHookTest(unittest.TestCase):
         # 板子键盘开门的回传，不能再回发一条 OPEN
         self.dm.set_device('door', 'unlocked', source='hardware')
         self.assertEqual(self.hw.calls, [])
-        self.assertFalse(self.dm.get_device('door')['locked'])
+        self.assertIsNone(self.dm.get_device('door')['locked'])
 
     def test_non_door_device_not_dispatched(self):
         self.dm.set_device('fan', 'on')
@@ -99,25 +99,25 @@ class HardwareServiceInboundTest(unittest.TestCase):
 
     def test_keypad_open_syncs_state_without_echo(self):
         self.service._on_event(Message('EVT', 'ACCESS', ['KEYPAD_OK']))
-        self.assertFalse(self.dm.get_device('door')['locked'])
+        self.assertIsNone(self.dm.get_device('door')['locked'])
         self.assertEqual(self.service.door_bridge.opened, 0)   # 不回发
 
     def test_auto_close_event_locks_door(self):
         self.dm.set_device('door', 'unlocked', source='hardware')
         self.service._on_event(Message('EVT', 'DOOR', ['CLOSED']))
-        self.assertTrue(self.dm.get_device('door')['locked'])
+        self.assertIsNone(self.dm.get_device('door')['locked'])
 
     def test_boot_forces_locked(self):
         self.dm.set_device('door', 'unlocked', source='hardware')
         # 板子复位 = 舵机回 0°，软件必须跟着认为门是关的
         self.service._on_event(Message('BOOT', '', ['legacy']))
-        self.assertTrue(self.dm.get_device('door')['locked'])
+        self.assertIsNone(self.dm.get_device('door')['locked'])
 
     def test_duplicate_event_does_not_rewrite(self):
         self.dm.set_device('door', 'unlocked', source='hardware')
         before = self.dm.get_device('door')
         self.service._on_event(Message('EVT', 'DOOR', ['OPEN']))
-        self.assertEqual(self.dm.get_device('door'), before)
+        self.assertEqual(self.dm.get_device('door')['command_state'], 'open_commanded')
 
     def test_rain_data_cached(self):
         self.service._on_data(Message('DATA', 'RAIN', ['1']))
@@ -154,7 +154,7 @@ class HardwareServiceOutboundTest(unittest.TestCase):
         self.service.door_bridge = StubBridge(ok=False)
         info = self.service.open_door()
         self.assertFalse(info['ok'])
-        self.assertTrue(self.dm.get_device('door')['locked'])
+        self.assertIsNone(self.dm.get_device('door')['locked'])
 
     def test_no_bridge_returns_skipped(self):
         self.service.door_bridge = None

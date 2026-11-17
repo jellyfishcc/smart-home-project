@@ -173,7 +173,7 @@ async function handleFaceFile(file) {
                     <div class="alert alert-success">
                         <i class="bi bi-check-circle-fill" style="font-size:18px;"></i>
                         <div>
-                            <strong>门禁已开启</strong> - 欢迎回来，${escapeHtml(d.person_name || '授权人员')}
+                            <strong>${escapeHtml(d.detail)}</strong> - 欢迎回来，${escapeHtml(d.person_name || '授权人员')}
                             <div style="font-size:12px;margin-top:4px;">相似度: ${formatSimilarity(d.confidence)} | 活体检测: ${d.liveness.is_live ? '通过' : '未通过'} (${d.liveness.score}分)</div>
                         </div>
                     </div>`;
@@ -229,7 +229,7 @@ async function handleFaceCamera() {
                     <div class="alert alert-success">
                         <i class="bi bi-check-circle-fill" style="font-size:18px;"></i>
                         <div>
-                            <strong>门禁已开启</strong> - 欢迎回来，${escapeHtml(d.person_name || '授权人员')}
+                            <strong>${escapeHtml(d.detail)}</strong> - 欢迎回来，${escapeHtml(d.person_name || '授权人员')}
                             <div style="font-size:12px;margin-top:4px;">相似度 ${formatSimilarity(d.confidence)} | 活体检测 ${d.liveness.is_live ? '通过' : '未通过'} (${d.liveness.score}分)</div>
                         </div>
                     </div>`;

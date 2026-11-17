@@ -89,6 +89,7 @@ function statusBadge(result) {
 function deviceStatusText(device, state) {
     if (device === 'light') return state.on ? `开启 (${state.brightness}%)` : '关闭';
     if (device === 'fan') return state.on ? `开启 (档位${state.speed})` : '关闭';
+    if (device === 'door' && state.locked == null) return '实际位置未知';
     if (device === 'door') return state.locked ? '锁定' : '已开锁';
     if (device === 'window') return state.closed ? '关闭' : '打开';
     if (device === 'ac') return state.on ? `开启 (${state.temp}°C)` : '关闭';

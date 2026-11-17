@@ -32,11 +32,11 @@
 
 <div class="grid-3">
     <!-- 灯光控制 -->
-    <div class="card">
+    <div class="card" data-env-device="light">
         <div class="card-header">
             <h5><i class="bi bi-lightbulb-fill" style="color:var(--color-warning);"></i> 灯光控制</h5>
             <label class="switch">
-                <input type="checkbox" id="lightSwitch" onchange="toggleDevice('light')">
+                <input type="checkbox" id="lightSwitch" onchange="setEnvControl('light', this.checked ? 'on' : 'off')">
                 <span class="slider"></span>
             </label>
         </div>
@@ -44,11 +44,11 @@
             <div style="text-align:center;margin-bottom:16px;">
                 <i class="bi bi-lightbulb" id="lightIcon" style="font-size:48px;color:var(--color-text-light);transition:all 0.3s;"></i>
                 <h3 id="lightBrightnessDisplay" style="margin-top:8px;">0%</h3>
-                <p style="font-size:12px;color:var(--color-text-light);">当前亮度</p>
+                <p style="font-size:12px;color:var(--color-text-light);">当前亮度</p><p id="lightModeText">控制模式未知</p><button class="btn btn-outline btn-sm" onclick="setEnvControl('light', 'auto')">恢复光敏自动</button>
             </div>
             <div>
                 <label style="font-size:12px;color:var(--color-text-light);display:flex;justify-content:space-between;">
-                    <span>亮度调节</span>
+                    <span>手动亮度调节</span>
                     <span id="lightBrightnessValue">0</span>
                 </label>
                 <input type="range" class="slider-range" id="lightSlider" min="0" max="100" value="0"
@@ -64,11 +64,11 @@
     </div>
 
     <!-- 风扇控制 -->
-    <div class="card">
+    <div class="card" data-env-device="fan">
         <div class="card-header">
             <h5><i class="bi bi-fan" style="color:var(--color-info);"></i> 风扇控制</h5>
             <label class="switch">
-                <input type="checkbox" id="fanSwitch" onchange="toggleDevice('fan')">
+                <input type="checkbox" id="fanSwitch" onchange="setEnvControl('fan', this.checked ? 'on' : 'off')">
                 <span class="slider"></span>
             </label>
         </div>
@@ -76,7 +76,7 @@
             <div style="text-align:center;margin-bottom:16px;">
                 <i class="bi bi-fan" id="fanIcon" style="font-size:48px;color:var(--color-text-light);transition:all 0.3s;"></i>
                 <h3 id="fanSpeedDisplay">关闭</h3>
-                <p style="font-size:12px;color:var(--color-text-light);" id="fanAutoText">手动模式</p>
+                <p style="font-size:12px;color:var(--color-text-light);" id="fanAutoText">控制模式未知</p><button class="btn btn-outline btn-sm" onclick="setEnvControl('fan', 'auto')">恢复温控自动</button>
             </div>
             <div style="display:flex;gap:6px;">
                 <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setFanSpeed(0)">关</button>
@@ -85,7 +85,7 @@
                 <button class="btn btn-outline btn-sm" style="flex:1;" onclick="setFanSpeed(3)">高</button>
             </div>
             <div style="margin-top:12px;padding:10px;background:rgba(106,156,184,0.1);border-radius:8px;">
-                <p style="font-size:12px;color:var(--color-info);"><i class="bi bi-info-circle"></i> 温度超过28°C时自动开启</p>
+                <p style="font-size:12px;color:var(--color-info);"><i class="bi bi-info-circle"></i> 自动模式：≥30°C 开，≤28°C 关；手动关闭保持关闭</p>
             </div>
         </div>
     </div>
@@ -206,6 +206,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/environment_controls.js') }}"></script>
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     loadDeviceStatus();
@@ -248,21 +249,25 @@ function renderHardware(data) {
         } else if (door.port) {
             doorText.textContent = `${door.port} · ${door.protocol === 'legacy' ? '旧固件（无 CLOSE）' : '协议 v' + door.protocol}`;
         } else {
-            doorText.textContent = '端口未打开';
+            doorText.textContent = door.error || '端口未打开';
         }
     }
+
+    if (doorText) doorText.textContent += ' · USB ' + (data.door_usb_serial || '未配置');
 
     setHwBadge('hwEnvBadge', !!env.connected, env.connected ? '环境板在线' : '环境板离线');
     const envText = document.getElementById('hwEnvText');
     if (envText) {
         if (data.env_bridge === null) {
-            envText.textContent = '未启用';
+            envText.textContent = data.environment_enabled ? (data.error || '启动失败，查日志') : '未启用';
         } else if (env.port) {
             envText.textContent = `${env.port} · 协议 v${env.protocol}`;
         } else {
-            envText.textContent = '端口未打开';
+            envText.textContent = env.error || '端口未打开';
         }
     }
+
+    if (envText) envText.textContent += ' · USB ' + (data.environment_usb_serial || '未配置');
 
     const cmd = document.getElementById('hwLastCommand');
     const last = data.last_command;
@@ -272,7 +277,7 @@ function renderHardware(data) {
             cmd.style.color = 'var(--color-text-light)';
         } else {
             const tail = last.error ? ` · ${last.error}` : '';
-            cmd.textContent = `最近命令：${last.command} ${last.ok ? '成功' : '失败'} ${Math.round(last.elapsed_ms)}ms${tail}`;
+            cmd.textContent = `最近命令：${last.command} ${last.ok ? '已接受（非位置确认）' : '未完成'} ${Math.round(last.elapsed_ms)}ms${tail}`;
             cmd.style.color = last.ok ? 'var(--color-text-light)' : 'var(--color-danger)';
         }
     }
@@ -295,7 +300,9 @@ async function loadDeviceStatus() {
 }
 
 function updateDeviceUI(device, state) {
+    if (!EnvControls.accept(device, state)) return;
     if (device === 'light') {
+        document.getElementById('lightModeText').textContent = envModeLabel(state.mode) + ' · ' + ({ack: '命令已确认', event: '板端输出回报'}[state.state_source] || '尚无硬件确认');
         document.getElementById('lightSwitch').checked = state.on;
         document.getElementById('lightSlider').value = state.brightness;
         document.getElementById('lightBrightnessDisplay').textContent = state.brightness + '%';
@@ -311,6 +318,7 @@ function updateDeviceUI(device, state) {
             icon.style.textShadow = 'none';
         }
     } else if (device === 'fan') {
+        document.getElementById('fanAutoText').textContent = envModeLabel(state.mode) + ' · ' + ({ack: '命令已确认', event: '板端输出回报'}[state.state_source] || '尚无硬件确认');
         document.getElementById('fanSwitch').checked = state.on;
         document.getElementById('fanSpeedDisplay').textContent = state.on ? `档位 ${state.speed}` : '关闭';
         const icon = document.getElementById('fanIcon');
@@ -322,9 +330,9 @@ function updateDeviceUI(device, state) {
             icon.style.animation = 'none';
         }
     } else if (device === 'door') {
-        document.getElementById('doorBadge').textContent = state.locked ? '已锁定' : '已开锁';
+        document.getElementById('doorBadge').textContent = state.locked == null ? '位置未知 / ' + (state.command_state || '未确认') : (state.locked ? '已锁定' : '已开锁');
         document.getElementById('doorBadge').className = state.locked ? 'badge badge-success' : 'badge badge-warning';
-        document.getElementById('doorLockStatus').textContent = state.locked ? '已锁定' : '已开锁';
+        document.getElementById('doorLockStatus').textContent = state.locked == null ? '位置未知 / ' + (state.command_state || '未确认') : (state.locked ? '已锁定' : '已开锁');
         const icon = document.getElementById('doorLockIcon');
         if (state.locked) {
             icon.className = 'bi bi-lock-fill';
@@ -358,6 +366,28 @@ function hwWarning(result) {
     return '';
 }
 
+function envModeLabel(mode) {
+    return {auto: '自动', manual_on: '手动开启', manual_off: '手动关闭'}[mode] || '控制模式未知';
+}
+
+socket.on('connect', () => { EnvControls.reset(); loadDeviceStatus(); });
+
+async function sendEnvRequest(device, path, payload) {
+    return EnvControls.run(device, async () => {
+        const res = await API.post(path, payload);
+        if (res.code !== 0) throw new Error(res.message || '命令未完成');
+        if (res.data && res.data.state) updateDeviceUI(device, res.data.state);
+        showToast(res.message || '控制已更新', 'success');
+    }, error => {
+        showToast(error.message || '控制失败', 'error');
+        loadDeviceStatus();
+    });
+}
+
+async function setEnvControl(device, status) {
+    return sendEnvRequest(device, `/api/devices/${device}/control`, {status});
+}
+
 async function toggleDevice(device) {
     try {
         const res = await API.post(`/api/devices/${device}/toggle`, { source: 'remote' });
@@ -379,20 +409,7 @@ function onLightSlide() {
 }
 
 async function setLightBrightness(brightness) {
-    try {
-        const res = await API.post('/api/devices/light/brightness', { brightness: parseInt(brightness), source: 'remote' });
-        if (res.code === 0) {
-            updateDeviceUI('light', res.data.state);
-            const warn = hwWarning(res.data);
-            if (warn) {
-                showToast(`亮度已记录，但硬件未确认：${warn}`, 'error');
-            } else {
-                showToast(`灯光亮度设为 ${brightness}%`, 'success');
-            }
-        }
-    } catch (e) {
-        showToast('设置失败', 'error');
-    }
+    return sendEnvRequest('light', '/api/devices/light/brightness', {brightness: parseInt(brightness)});
 }
 
 function onACSlide() {
@@ -417,32 +434,17 @@ async function setACTemp(temp) {
 }
 
 async function setFanSpeed(speed) {
-    try {
-        let res;
-        if (parseInt(speed) === 0) {
-            res = await API.post('/api/devices/fan/control', { status: 'off', source: 'remote' });
-        } else {
-            res = await API.post('/api/devices/fan/control', { status: 'on', value: parseInt(speed), source: 'remote' });
-        }
-        const warn = hwWarning(res.data);
-        if (warn) {
-            showToast(`风扇已记录为 ${speed} 档，但硬件未确认：${warn}`, 'error', 5000);
-        } else {
-            showToast(`风扇档位设为 ${speed}`, 'success');
-        }
-        loadDeviceStatus();
-    } catch (e) {
-        showToast('设置失败', 'error');
-    }
+    const value = parseInt(speed);
+    return sendEnvRequest('fan', '/api/devices/fan/control', {status: value === 0 ? 'off' : 'on', value});
 }
 
 async function controlDoor(status) {
     try {
         const res = await API.post('/api/devices/door/control', { status: status, source: 'remote' });
         const warn = hwWarning(res.data);
-        const msg = status === 'unlocked' ? '门已开锁' : '门已锁定';
+        const msg = res.message || '命令结果未知';
         if (warn) {
-            showToast(`${msg}（仅软件状态）— 硬件未确认：${warn}`, 'error', 6000);
+            showToast(`${msg}— 硬件命令未完成：${warn}`, 'error', 6000);
         } else {
             showToast(msg, status === 'unlocked' ? 'warning' : 'success');
         }
@@ -458,7 +460,7 @@ async function controlWindow(status) {
         const warn = hwWarning(res.data);
         const msg = status === 'open' ? '窗户已打开' : '窗户已关闭';
         if (warn) {
-            showToast(`${msg}（仅软件状态）— 硬件未确认：${warn}`, 'error', 6000);
+            showToast(`${msg}— 硬件命令未完成：${warn}`, 'error', 6000);
         } else if (!(res.data && res.data.hardware)) {
             showToast(`${msg}（仅记录状态，窗户无硬件执行器）`, 'info', 4000);
         } else {

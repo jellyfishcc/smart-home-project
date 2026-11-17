@@ -20,12 +20,12 @@ import threading
 import time
 from collections import deque
 
-from services.serial_bridge import PYSERIAL_AVAILABLE, SerialBridge
+from services.serial_bridge import PYSERIAL_AVAILABLE, SerialBridge, decode_env
 
 logger = logging.getLogger(__name__)
 
 # 固件里 OPEN_DURATION = 5000ms，这里多给 1 秒余量。
-# 正常情况下板子会主动上报「自动关门」，计时器只是丢包时的兜底。
+# 定时器只能标记自动关门未确认，不能推断实体门位置。
 DEFAULT_AUTO_CLOSE_GRACE = 6.0
 
 
@@ -52,6 +52,7 @@ class HardwareService:
         self._last_event_at = 0.0
         self._recent = deque(maxlen=30)   # 最近事件，供调试与前端展示
         self._last_command = None
+        self._startup_error = None
 
     # ---------------- 注入 ----------------
 
@@ -71,16 +72,22 @@ class HardwareService:
         if self._running:
             return True
         if not PYSERIAL_AVAILABLE:
+            self._startup_error = 'pyserial_missing'
             logger.warning('[Hardware] 未安装 pyserial，跳过硬件对接')
             return False
 
         cfg = self._app.config if self._app else {}
         started = False
+        door_id, env_id = cfg.get('DOOR_USB_SERIAL', ''), cfg.get('ENVIRONMENT_USB_SERIAL', '')
+        if door_id and door_id == env_id:
+            self._startup_error = 'duplicate_board_mapping'
+            return False
 
-        # ---- 门禁板（UNO II）：SERIAL_ENABLED 控制，行为和以前完全一致 ----
+        # ---- 门禁板（UNO II）：SERIAL_ENABLED 控制，按 USB 身份连接 ----
         if cfg.get('SERIAL_ENABLED'):
             bridge = SerialBridge(
                 port=cfg.get('SERIAL_PORT', ''),
+                usb_serial=cfg.get('DOOR_USB_SERIAL', ''),
                 baudrate=cfg.get('SERIAL_BAUD', 9600),
                 cmd_timeout=cfg.get('SERIAL_CMD_TIMEOUT', 0.3),
                 retries=cfg.get('SERIAL_CMD_RETRIES', 2),
@@ -100,14 +107,8 @@ class HardwareService:
             started = True
             logger.info('[Hardware] 门禁板对接已启动')
 
-        # ---- 环境板（UNO I）：可选件，没配端口就不启动 ----
+        # ---- 环境板（UNO I）：必须配置独立 USB 身份 ----
         self.env_bridge = self._start_env_bridge(cfg)
-
-        if self.env_bridge and self.door_bridge and not cfg.get('SERIAL_PORT'):
-            # 门禁板端口留空时会在 reader 线程里自动探测，很可能摸到环境板那条口，
-            # 两块板抢一个 COM 会互相踩。这里只提醒，不擅自改行为
-            logger.warning('[Hardware] 门禁板端口为自动探测，可能与环境板抢同一个 COM；'
-                           '建议显式设置 SMART_HOME_SERIAL_PORT')
 
         if not started and self.env_bridge is None:
             return False
@@ -119,19 +120,17 @@ class HardwareService:
         """
         环境板（UNO I）：独立一条串口，只收 @DATA ENV / @PONG，不参与门禁逻辑。
 
-        端口必须显式配置。留空时绝不退回自动探测 —— 自动探测会挑中门禁板那条口，
-        两块板共用一个 COM 会互相踩，且打开串口会因 DTR 把对方复位。
+        USB Serial Number 必须显式配置，不允许按设备节点顺序猜测角色。
         """
         if not cfg.get('SERIAL_ENV_ENABLED'):
             return None
-        port = cfg.get('SERIAL_ENV_PORT', '')
-        if not port:
-            logger.warning('[Hardware] 环境板已启用但未配置环境板端口，跳过'
-                           '（设 SMART_HOME_SERIAL_ENV_PORT=COM4）')
+        if not cfg.get('ENVIRONMENT_USB_SERIAL'):
+            self._startup_error = 'environment_usb_serial_mapping_required'
             return None
-
+        port = cfg.get('SERIAL_ENV_PORT', '')
         bridge = SerialBridge(
             port=port,
+            usb_serial=cfg.get('ENVIRONMENT_USB_SERIAL', ''),
             baudrate=cfg.get('SERIAL_BAUD', 9600),
             cmd_timeout=cfg.get('SERIAL_CMD_TIMEOUT', 0.3),
             retries=cfg.get('SERIAL_CMD_RETRIES', 2),
@@ -184,13 +183,7 @@ class HardwareService:
         return self._command('CLOSE', bridge.close_door)
 
     def set_fan(self, on):
-        """
-        风扇开关（手动）。
-
-        下发「开」之后固件交出控制权并一直保持（不再按温度自治），
-        直到软件再发一次「关」；「关」的瞬间固件立刻交还自治，
-        下一轮 loop 就按传感器重新判断，热的话会自己转起来并回报 @EVT。
-        """
+        """发送明确 ON/OFF；ACK 表示接受，输出可由后续 EVT 校正。"""
         bridge = self.env_bridge
         if bridge is None:
             return self._skipped('环境板未连接')
@@ -268,28 +261,29 @@ class HardwareService:
         self._remember(msg)
         try:
             if msg.kind == 'BOOT':
-                # 复位后舵机回到 0°，门一定是关的；之前的计时也作废
+                # Boot reports a reset, not measured door position.
                 self._cancel_auto_close()
-                self._sync_door('locked')
+                self._sync_door('reset')
                 self._emit_status()
 
             elif msg.kind == 'EVT' and msg.name == 'DOOR':
                 state = msg.args[0].upper() if msg.args else ''
                 if state == 'OPEN':
-                    self._sync_door('unlocked')
+                    self._sync_door('open_commanded')
                 elif state == 'CLOSED':
                     self._cancel_auto_close()
-                    self._sync_door('locked')
+                    self._sync_door('close_commanded')
 
             elif msg.kind == 'EVT' and msg.name == 'ACCESS':
                 # 键盘开门是板子自己执行的，软件只负责跟上状态
                 result = msg.args[0].upper() if msg.args else ''
                 if result == 'KEYPAD_OK':
-                    self._sync_door('unlocked')
+                    self._sync_door('open_commanded')
                     self._arm_auto_close()
                 logger.info('[Hardware] 键盘验证结果: %s', result or '未知')
 
             elif msg.kind == 'EVT' and msg.name == 'LINK':
+                self._sync_door('unknown')
                 logger.warning('[Hardware] 链路状态: %s', ' '.join(msg.args))
                 self._emit_status()
 
@@ -313,13 +307,15 @@ class HardwareService:
             if msg.kind == 'BOOT':
                 # 复位后风扇停、灯带灭（setup() 的初始状态），软件状态跟着回零
                 logger.info('[Hardware] 环境板复位，风扇/灯带状态回零')
+                self._sync_env_mode('fan', 'auto')
+                self._sync_env_mode('light', 'auto')
                 self._sync_env_state(fan=False, lamp=False)
                 self._emit_status()
 
             elif msg.kind == 'EVT' and msg.name == 'FAN':
                 state = msg.args[0].upper() if msg.args else ''
                 if state in ('ON', 'OFF'):
-                    self._sync_env_state(fan=(state == 'ON'))
+                    self._sync_env_state(fan=(state == 'ON'), event_at=msg.ts)
 
             elif msg.kind == 'EVT' and msg.name == 'LAMP':
                 state = msg.args[0].upper() if msg.args else ''
@@ -330,13 +326,19 @@ class HardwareService:
                     except ValueError:
                         level = None
                 if state in ('ON', 'OFF'):
-                    self._sync_env_state(lamp=(state == 'ON'), brightness=level)
+                    self._sync_env_state(lamp=(state == 'ON'), brightness=level, event_at=msg.ts)
 
             elif msg.kind == 'EVT' and msg.name == 'CTL':
-                logger.info('[Hardware] 环境板已交还自治: %s',
+                if len(msg.args) >= 2:
+                    mode, role = msg.args[:2]
+                    if mode in ('AUTO', 'MANUAL_ON', 'MANUAL_OFF') and role in ('FAN', 'LAMP'):
+                        self._sync_env_mode('fan' if role == 'FAN' else 'light', mode.lower())
+                logger.info('[Hardware] 环境板控制模式: %s',
                             ' '.join(msg.args) or '-')
 
             elif msg.kind == 'EVT' and msg.name == 'LINK':
+                from services.sensor_simulator import sensor_simulator
+                sensor_simulator._reading_valid = False
                 logger.warning('[Hardware] 环境板链路: %s', ' '.join(msg.args))
 
             elif msg.kind == 'NAK':
@@ -345,7 +347,7 @@ class HardwareService:
         except Exception:
             logger.exception('[Hardware] 处理环境板事件失败: %s', msg)
 
-    def _sync_env_state(self, fan=None, lamp=None, brightness=None):
+    def _sync_env_state(self, fan=None, lamp=None, brightness=None, event_at=None):
         """
         把环境板的事实同步到软件状态（风扇/灯带）。
 
@@ -354,6 +356,20 @@ class HardwareService:
         """
         dm = self._device_manager
         if dm is None:
+            return
+
+        reporter = getattr(dm, 'record_environment_report', None)
+        if reporter:
+            def apply():
+                if fan is not None:
+                    reporter('fan', fan, event_at=event_at)
+                if lamp is not None:
+                    reporter('light', lamp, brightness=brightness, event_at=event_at)
+            if self._app:
+                with self._app.app_context():
+                    apply()
+            else:
+                apply()
             return
 
         if fan is not None:
@@ -394,6 +410,7 @@ class HardwareService:
                 # 第三个字段是固件的「DHT 读数有效」标志，0 表示现有数值还是上电默认值
                 self._env = {
                     'args': list(msg.args),
+                    'valid': decode_env(msg.args) is not None,
                     'at': time.time(),
                 }
                 self._remember(msg)
@@ -403,22 +420,20 @@ class HardwareService:
             logger.exception('[Hardware] 处理数据失败: %s', msg)
 
     def _apply_env_reading(self, args):
-        if len(args) < 2:
+        if self._app and not self._app.config.get('SERIAL_ENV_ENABLED'):
             return
-        try:
-            temperature = int(args[0]) / 10.0
-            humidity = int(args[1]) / 10.0
-        except ValueError:
-            logger.warning('[Hardware] 环境数据格式不对: %s', args)
-            return
-
-        # 第三个字段是固件的「DHT 读数有效」标志。为 0 说明板子还没读成功过，
-        # 这两个数是上电默认的 25/50，拿去覆盖页面只会让人误以为传感器挂了
-        if len(args) >= 3 and args[2] == '0':
-            logger.info('[Hardware] 环境板尚未读到 DHT，本次读数不上报')
-            return
-
         from services.sensor_simulator import sensor_simulator
+        reading = decode_env(args)
+        if reading is None:
+            sensor_simulator._reading_valid = False
+            if self._socketio:
+                self._socketio.emit('sensor_update', {
+                    'temperature': None, 'humidity': None, 'source': 'hardware',
+                    'available': False, 'valid': False, 'fan_activated': None,
+                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                })
+            return
+        temperature, humidity = reading
 
         if self._socketio:
             self._socketio.emit('sensor_update', {
@@ -430,9 +445,9 @@ class HardwareService:
 
         if self._app:
             with self._app.app_context():
-                sensor_simulator.inject_reading(temperature, humidity)
+                sensor_simulator.inject_reading(temperature, humidity, source='hardware')
         else:
-            sensor_simulator.inject_reading(temperature, humidity)
+            sensor_simulator.inject_reading(temperature, humidity, source='hardware')
 
     def _sync_door(self, state):
         """
@@ -443,16 +458,7 @@ class HardwareService:
         """
         if self._device_manager is None:
             return
-        want_locked = (state == 'locked')
-        if self._device_manager.get_device('door').get('locked') == want_locked:
-            return
-
-        logger.info('[Hardware] 同步门状态 -> %s', state)
-        if self._app:
-            with self._app.app_context():
-                self._device_manager.set_device('door', state, source='hardware')
-        else:
-            self._device_manager.set_device('door', state, source='hardware')
+        self._device_manager.set_door_command(state)
 
     # ---------------- 命令执行与兜底计时 ----------------
 
@@ -466,7 +472,11 @@ class HardwareService:
         if bridge is None:
             return self._skipped(missing)
 
-        result = sender()
+        try:
+            result = sender()
+        except Exception as exc:
+            from services.serial_bridge import CommandResult
+            result = CommandResult(False, name, error=str(exc))
         info = {
             'command': name,
             'ok': bool(result),
@@ -475,18 +485,26 @@ class HardwareService:
             'error': getattr(result, 'error', '') or '',
             'via': 'serial',
         }
+        reply = getattr(result, 'reply', None)
+        if name in ('FAN', 'LAMP') and reply is not None:
+            info['ack'] = {'kind': reply.kind, 'name': reply.name,
+                           'args': list(reply.args), 'at': reply.ts}
         self._last_command = info
+        if name in ('FAN', 'LAMP'):
+            self._emit_status()
 
         if result:
             logger.info('[Hardware] %s 已下发（%d 次尝试，%.0fms）',
                         name, info['attempts'], info['elapsed_ms'])
+            if name in ('OPEN', 'CLOSE'):
+                self._sync_door(name.lower() + '_accepted')
             if name == 'OPEN':
                 self._arm_auto_close()
         else:
             logger.warning('[Hardware] %s 下发失败: %s', name, info['error'])
-            # 命令没送到，软件状态不该停在「已开」，回滚成事实上的关
+            # Timeout may mean execution with a lost ACK; position stays unknown.
             if name == 'OPEN':
-                self._sync_door('locked')
+                self._sync_door('unknown')
         return info
 
     def _bridge_open(self):
@@ -498,7 +516,7 @@ class HardwareService:
                 'attempts': 0, 'elapsed_ms': 0.0, 'error': reason, 'via': 'serial'}
 
     def _arm_auto_close(self):
-        """兜底：板子没上报自动关门时，按固件 5s 的节奏自己回锁"""
+        """Expire the expected motion window without inventing physical closure."""
         delay = DEFAULT_AUTO_CLOSE_GRACE
         if self._app:
             delay = self._app.config.get('SERIAL_DOOR_AUTO_CLOSE', delay)
@@ -514,8 +532,8 @@ class HardwareService:
     def _auto_close_fire(self):
         with self._lock:
             self._auto_close_timer = None
-        logger.info('[Hardware] 兜底回锁计时到期')
-        self._sync_door('locked')
+        logger.info('[Hardware] 自动关门等待到期，位置仍未确认')
+        self._sync_door('auto_close_unconfirmed')
 
     def _cancel_auto_close(self):
         with self._lock:
@@ -539,7 +557,15 @@ class HardwareService:
     def status(self):
         bridge_status = self.door_bridge.status() if self.door_bridge else None
         env_status = self.env_bridge.status() if self.env_bridge else None
+        cfg = self._app.config if self._app else {}
         return {
+            'mode': 'hardware' if cfg.get('SERIAL_ENABLED') or cfg.get('SERIAL_ENV_ENABLED') else ('mock' if cfg.get('SIMULATION_MODE', True) else 'unavailable'),
+            'sensor_source': 'hardware' if cfg.get('SERIAL_ENV_ENABLED') else ('simulation' if cfg.get('SIMULATION_MODE', True) else 'unavailable'),
+            'door_usb_serial': cfg.get('DOOR_USB_SERIAL') or None,
+            'environment_enabled': bool(cfg.get('SERIAL_ENV_ENABLED')),
+            'environment_usb_serial': cfg.get('ENVIRONMENT_USB_SERIAL') or None,
+            'error': self._startup_error,
+            'physical_position': 'unknown',
             'enabled': bool(self._app.config.get('SERIAL_ENABLED')) if self._app else False,
             'running': self._running,
             'connected': bool(bridge_status and bridge_status.get('connected')),
