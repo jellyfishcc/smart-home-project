@@ -1,0 +1,48 @@
+## 硬件接线
+
+### 第一块 Arduino UNO · 智能门禁
+
+| 模块 | 模块端引脚 | Arduino UNO 引脚 |
+|---|---|---|
+| TM1637 四位数码管 | VCC | 5V |
+| TM1637 四位数码管 | GND | GND |
+| TM1637 四位数码管 | CLK | A0 |
+| TM1637 四位数码管 | DIO | A1 |
+| 雨滴传感器 | VCC | 5V |
+| 雨滴传感器 | GND | GND |
+| 雨滴传感器 | OUT（信号输出） | A2 |
+| TTP223 触摸传感器 | VCC | 5V |
+| TTP223 触摸传感器 | GND | GND |
+| TTP223 触摸传感器 | SIG（信号输出） | D4 |
+| 4×4 矩阵键盘 | R1（第一行） | D3 |
+| 4×4 矩阵键盘 | R2（第二行） | D9 |
+| 4×4 矩阵键盘 | R3（第三行） | D10 |
+| 4×4 矩阵键盘 | R4（第四行） | D11 |
+| 4×4 矩阵键盘 | C1（第一列） | D5 |
+| 4×4 矩阵键盘 | C2（第二列） | D6 |
+| 4×4 矩阵键盘 | C3（第三列） | D7 |
+| 4×4 矩阵键盘 | C4（第四列） | D12 |
+
+### 第二块 Arduino UNO · 环境监测
+
+| 模块 | 模块端引脚 | Arduino UNO 引脚 |
+|---|---|---|
+| SH1106 SPI OLED | VCC | 5V |
+| SH1106 SPI OLED | GND | GND |
+| SH1106 SPI OLED | SCK（时钟） | D13 |
+| SH1106 SPI OLED | MOSI（数据） | D11 |
+| SH1106 SPI OLED | CS（片选） | D10 |
+| SH1106 SPI OLED | DC（数据／命令） | D9 |
+| SH1106 SPI OLED | RST（复位） | D8 |
+| DHT11 温湿度传感器 | VCC | 5V |
+| DHT11 温湿度传感器 | GND | GND |
+| DHT11 温湿度传感器 | DATA（数据） | D7 |
+| 直流风扇模块 | VCC | 5V |
+| 直流风扇模块 | GND | GND |
+| 直流风扇模块 | SIG（控制信号） | D5 |
+| RGB LED 灯带（WS2812） | VCC | 5V |
+| RGB LED 灯带（WS2812） | GND | GND |
+| RGB LED 灯带（WS2812） | DIN（数据输入） | D4 |
+| 光敏传感器（LDR） | VCC | 5V |
+| 光敏传感器（LDR） | GND | GND |
+| 光敏传感器（LDR） | DO（数字输出） | D6 |

@@ -20,6 +20,7 @@ from models import (db, AuthorizedPerson, AccessLog, TemperatureLog, DeviceStatu
                     DetectionRecord, LightingRecord, SentryEvent)
 from services.device_manager import device_manager
 from services.sensor_simulator import sensor_simulator
+from services.hardware_service import hardware_service
 from services.camera_capture import capture_camera_frame
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
@@ -182,8 +183,7 @@ def _process_access_image(file_path, filename):
     if result['recognized'] and person:
         if person.is_authorized and not person.is_fake:
             access_result = 'granted'
-            detail = f'授权人员 {person.name} 识别成功，门禁已开启'
-            device_manager.set_device('door', 'unlocked', source='face_recognition')
+            detail = f'授权人员 {person.name} 识别成功'
         elif person.is_fake:
             access_result = 'denied'
             detail = f'伪造身份检测 {person.name}，门禁拒绝'
@@ -194,9 +194,15 @@ def _process_access_image(file_path, filename):
         access_result = 'denied'
         detail = '未授权人员，门禁拒绝'
 
+    # 活体检测必须先于执行器：否则伪造人脸会先把门打开、再被记录成「拒绝」
     if not liveness['is_live']:
         access_result = 'denied'
         detail += f' | 活体检测失败({liveness["detail"]})'
+
+    # 只有最终判定为 granted 才驱动门锁
+    if access_result == 'granted':
+        detail += '，门禁已开启'
+        device_manager.set_device('door', 'unlocked', source='face_recognition')
 
     log = AccessLog(
         person_id=person.id if person else None,
@@ -272,9 +278,7 @@ def recognize_face():
     if result['recognized'] and person:
         if person.is_authorized and not person.is_fake:
             access_result = 'granted'
-            detail = f'授权人员 {person.name} 识别成功，门禁已开启'
-            # 开门
-            device_manager.set_device('door', 'unlocked', source='face_recognition')
+            detail = f'授权人员 {person.name} 识别成功'
         elif person.is_fake:
             access_result = 'denied'
             detail = f'伪造身份检测: {person.name}，门禁拒绝'
@@ -285,10 +289,15 @@ def recognize_face():
         access_result = 'denied'
         detail = '未授权人员，门禁拒绝'
 
-    # 活体检测失败
+    # 活体检测必须先于执行器：否则伪造人脸会先把门打开、再被记录成「拒绝」
     if not liveness['is_live']:
         access_result = 'denied'
         detail += f' | 活体检测失败({liveness["detail"]})'
+
+    # 只有最终判定为 granted 才驱动门锁
+    if access_result == 'granted':
+        detail += '，门禁已开启'
+        device_manager.set_device('door', 'unlocked', source='face_recognition')
 
     # 记录访问日志
     log = AccessLog(
@@ -581,6 +590,16 @@ def set_light_brightness():
     source = data.get('source', 'remote')
     result = device_manager.set_light_brightness(brightness, source)
     return jsonify({'code': 0, 'message': '亮度设置成功', 'data': result})
+
+
+# ============================================================
+# 4.1 硬件对接状态
+# ============================================================
+
+@api_bp.route('/hardware/status', methods=['GET'])
+def get_hardware_status():
+    """串口链路状态、最近收到的事件、最近一次下发结果"""
+    return jsonify({'code': 0, 'message': 'success', 'data': hardware_service.status()})
 
 
 # ============================================================

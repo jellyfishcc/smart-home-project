@@ -1,0 +1,435 @@
+/*
+ SmartHome_Final
+ Arduino UNO
+
+ OLED SH1106 SPI
+ DHT11
+ FAN
+ WS2812
+ LDR DO
+
+*/
+
+#include <Arduino.h>
+#include <U8g2lib.h>
+#include <Wire.h>
+#include <DHT.h>
+#include <Adafruit_NeoPixel.h>
+
+
+//================ OLED =================
+
+U8G2_SH1106_128X64_NONAME_1_4W_HW_SPI oled(
+  U8G2_R0,
+  10,
+  9,
+  8
+);
+
+
+//================ DHT11 ================
+
+#define DHT_PIN 7
+
+#define DHT_TYPE DHT11
+
+DHT dht(
+  DHT_PIN,
+  DHT_TYPE
+);
+
+
+//================ FAN =================
+
+#define FAN_PIN 5
+
+
+
+//================ WS2812 ===============
+
+#define LED_PIN 4
+
+#define LED_NUM 8
+
+
+Adafruit_NeoPixel strip(
+  LED_NUM,
+  LED_PIN,
+  NEO_GRB + NEO_KHZ800
+);
+
+
+
+//================ 光敏DO ===============
+
+#define LDR_PIN 6
+
+
+
+//================ 参数 =================
+
+// 风扇开启温度
+#define FAN_ON_TEMP 30
+
+// 风扇关闭温度
+#define FAN_OFF_TEMP 28
+
+
+
+//================ 数据变量 =============
+
+float temperature=25;
+bool fanState=false;
+float humidity=50;
+
+
+bool darkState=false;
+
+bool oldDarkState=false;
+
+int lightCount=0;
+
+bool lastLight=false;
+
+
+
+
+unsigned long dhtTimer=0;
+
+unsigned long oledTimer=0;
+float oldTemp=-100;
+float oldHum=-100;
+bool oldFan=false;
+
+
+//================ SETUP ================
+
+
+void setup()
+{
+
+Serial.begin(9600);
+
+
+// SPI保护
+
+pinMode(10,OUTPUT);
+
+digitalWrite(10,HIGH);
+
+
+// FAN
+
+pinMode(FAN_PIN,OUTPUT);
+
+digitalWrite(FAN_PIN,HIGH);
+
+
+// WS2812
+
+strip.begin();
+
+strip.setBrightness(30);
+
+strip.clear();
+
+strip.show();
+
+
+// 光敏
+
+pinMode(LDR_PIN,INPUT);
+
+
+// OLED
+
+oled.begin();
+
+oled.setContrast(120);
+
+
+oled.clearBuffer();
+
+oled.setFont(
+u8g2_font_6x12_tr
+);
+
+
+oled.drawStr(
+0,
+20,
+"Smart Home"
+);
+
+
+oled.drawStr(
+0,
+40,
+"Starting..."
+);
+
+
+oled.sendBuffer();
+
+
+
+// DHT
+
+dht.begin();
+
+
+delay(1000);
+
+
+Serial.println("Ready");
+
+
+}
+
+
+
+
+
+
+//================ LOOP =================
+
+
+void loop()
+{
+
+
+readLight();
+
+
+
+if(millis()-dhtTimer>2000)
+{
+
+readDHT();
+
+dhtTimer=millis();
+
+}
+
+
+
+controlFan();
+
+
+controlLamp();
+
+
+
+if(millis()-oledTimer>2000)
+{
+
+displayOLED();
+
+oledTimer=millis();
+
+}
+
+
+}
+//================ DHT读取 =================
+
+void readDHT()
+{
+
+  float h=dht.readHumidity();
+
+  float t=dht.readTemperature();
+
+
+  if(!isnan(h)&&!isnan(t))
+  {
+
+    humidity=h;
+
+    temperature=t;
+
+  }
+
+
+}
+
+
+
+//================ 光敏读取 =================
+
+void readLight()
+{
+
+int value=digitalRead(LDR_PIN);
+
+
+bool nowDark;
+
+
+if(value==HIGH)
+{
+nowDark=true;
+}
+else
+{
+nowDark=false;
+}
+
+
+
+if(nowDark==lastLight)
+{
+lightCount++;
+}
+else
+{
+lightCount=0;
+}
+
+
+lastLight=nowDark;
+
+
+
+if(lightCount>10)
+{
+darkState=nowDark;
+}
+
+
+}
+
+//================ 风扇控制 =================
+
+
+void controlFan()
+{
+
+  if(temperature >= FAN_ON_TEMP)
+  {
+
+    fanState=true;
+
+    digitalWrite(
+      FAN_PIN,
+      LOW
+    );
+
+  }
+
+
+  else if(temperature <= FAN_OFF_TEMP)
+  {
+
+    fanState=false;
+
+    digitalWrite(
+      FAN_PIN,
+      HIGH
+    );
+
+  }
+
+}
+
+
+
+//================ 灯带控制 =================
+
+
+void controlLamp()
+{
+
+if(darkState!=oldDarkState)
+{
+
+
+oldDarkState=darkState;
+
+
+
+if(darkState)
+{
+
+
+for(int i=0;i<LED_NUM;i++)
+{
+
+strip.setPixelColor(
+i,
+strip.Color(255,180,50)
+);
+
+}
+
+
+strip.show();
+
+
+}
+else
+{
+
+
+strip.clear();
+
+strip.show();
+
+
+}
+
+
+}
+
+
+}
+
+
+
+
+
+//================ OLED显示 =================
+
+
+void displayOLED()
+{
+
+oled.firstPage();
+
+do
+{
+
+oled.setFont(u8g2_font_6x12_tr);
+
+oled.drawStr(
+0,
+12,
+"SMART HOME"
+);
+
+
+oled.setCursor(0,30);
+oled.print("TEMP:");
+oled.print(temperature);
+oled.print(" C");
+
+
+oled.setCursor(0,45);
+oled.print("HUM:");
+oled.print(humidity);
+oled.print(" %");
+
+
+oled.setCursor(0,60);
+oled.print("FAN:");
+
+if(fanState)
+oled.print("ON");
+else
+oled.print("OFF");
+
+
+}
+while(oled.nextPage());
+
+}

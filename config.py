@@ -87,6 +87,32 @@ SECRET_KEY = 'smart-home-secret-key-2026'
 # 模拟模式（无硬件时使用）
 SIMULATION_MODE = True
 
+# ---------------- 硬件串口（Arduino 门禁板 / 环境板） ----------------
+# 通信层实现在 services/serial_bridge.py，只做信息交换，不含业务判断。
+# 默认关闭：不设 SMART_HOME_SERIAL_ENABLED=1 时行为与之前完全一致。
+# 打开后若找不到串口，仅打警告并自动重连，不会影响其它功能。
+SERIAL_ENABLED = os.environ.get('SMART_HOME_SERIAL_ENABLED', '0') in ('1', 'true', 'True')
+# 端口留空 = 自动探测（按 VID / 描述匹配 CH340、Arduino、CP210x 等）
+SERIAL_PORT = os.environ.get('SMART_HOME_SERIAL_PORT', '')
+SERIAL_BAUD = int(os.environ.get('SMART_HOME_SERIAL_BAUD', '9600'))
+# 单条命令等回执的超时（秒）。9600bps 下 20 字节约 21ms，300ms 留了 10 倍余量
+SERIAL_CMD_TIMEOUT = float(os.environ.get('SMART_HOME_SERIAL_TIMEOUT', '0.3'))
+# 超时重试次数。协议里的命令都是幂等的，重发安全
+SERIAL_CMD_RETRIES = max(0, int(os.environ.get('SMART_HOME_SERIAL_RETRIES', '2')))
+# 开串口会因 DTR 复位板子，这段是等待启动横幅的时间
+SERIAL_BOOT_WAIT = float(os.environ.get('SMART_HOME_SERIAL_BOOT_WAIT', '2.5'))
+# 心跳间隔（秒）；0 = 关闭。固件不会主动说话，靠它判定在线
+SERIAL_HEARTBEAT_INTERVAL = float(os.environ.get('SMART_HOME_SERIAL_HEARTBEAT', '3'))
+# 多久收不到任何上行就判离线（秒）
+SERIAL_OFFLINE_TIMEOUT = float(os.environ.get('SMART_HOME_SERIAL_OFFLINE', '10'))
+# 雨滴轮询间隔（秒）；固件没有主动上报能力，只能问。0 = 关闭
+SERIAL_RAIN_POLL_INTERVAL = float(os.environ.get('SMART_HOME_SERIAL_RAIN_POLL', '30'))
+# 断开后重连间隔（秒）
+SERIAL_RECONNECT_DELAY = float(os.environ.get('SMART_HOME_SERIAL_RECONNECT', '2'))
+# 兜底回锁：固件 OPEN_DURATION=5000ms，多给 1 秒。
+# 正常情况板子会主动上报「自动关门」，这个计时器只在丢包时生效
+SERIAL_DOOR_AUTO_CLOSE = float(os.environ.get('SMART_HOME_SERIAL_AUTO_CLOSE', '6'))
+
 # 设备初始状态
 DEFAULT_DEVICE_STATES = {
     'light': {'on': False, 'brightness': 0},

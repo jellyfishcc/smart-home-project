@@ -1,0 +1,319 @@
+#include <TM1637Display.h>
+#include <Servo.h>
+
+//================= 数码管 =================
+#define TM_CLK A0
+#define TM_DIO A1
+
+TM1637Display tm(TM_CLK, TM_DIO);
+
+//================= 雨滴模块 =================
+#define RAIN_PIN A2
+
+//================= 触摸门检测 =================
+#define DOOR_TOUCH_PIN 4
+const unsigned int TOUCH_DEBOUNCE = 60;
+
+//================= 舵机 =================
+Servo doorServo;
+
+#define SERVO_PIN 2
+
+const int SERVO_CLOSE_ANGLE = 0;
+const int SERVO_OPEN_ANGLE = 90;
+
+const unsigned long OPEN_DURATION = 5000;
+
+//================= 矩阵键盘 =================
+#define ROW1 3
+#define ROW2 9
+#define ROW3 10
+#define ROW4 11
+
+#define COL1 5
+#define COL2 6
+#define COL3 7
+#define COL4 12
+
+char keyMap[4][4] =
+{
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+
+String inputPwd = "";
+const String correctPwd = "6666";
+const byte maxPwdLen = 4;
+
+bool doorIsOpen = false;
+unsigned long doorOpenTime = 0;
+
+//================ 触摸读取 =================
+int readTouch(int pin)
+{
+  int a = digitalRead(pin);
+  delay(TOUCH_DEBOUNCE);
+  int b = digitalRead(pin);
+
+  if(a == b)
+    return a;
+
+  return b;
+}
+
+//================ 键盘扫描 =================
+char scanKey()
+{
+  digitalWrite(ROW1,LOW);
+
+  if(digitalRead(COL1)==LOW){delay(30);while(digitalRead(COL1)==LOW);return keyMap[0][0];}
+  if(digitalRead(COL2)==LOW){delay(30);while(digitalRead(COL2)==LOW);return keyMap[0][1];}
+  if(digitalRead(COL3)==LOW){delay(30);while(digitalRead(COL3)==LOW);return keyMap[0][2];}
+  if(digitalRead(COL4)==LOW){delay(30);while(digitalRead(COL4)==LOW);return keyMap[0][3];}
+
+  digitalWrite(ROW1,HIGH);
+
+  digitalWrite(ROW2,LOW);
+
+  if(digitalRead(COL1)==LOW){delay(30);while(digitalRead(COL1)==LOW);return keyMap[1][0];}
+  if(digitalRead(COL2)==LOW){delay(30);while(digitalRead(COL2)==LOW);return keyMap[1][1];}
+  if(digitalRead(COL3)==LOW){delay(30);while(digitalRead(COL3)==LOW);return keyMap[1][2];}
+  if(digitalRead(COL4)==LOW){delay(30);while(digitalRead(COL4)==LOW);return keyMap[1][3];}
+
+  digitalWrite(ROW2,HIGH);
+
+  digitalWrite(ROW3,LOW);
+
+  if(digitalRead(COL1)==LOW){delay(30);while(digitalRead(COL1)==LOW);return keyMap[2][0];}
+  if(digitalRead(COL2)==LOW){delay(30);while(digitalRead(COL2)==LOW);return keyMap[2][1];}
+  if(digitalRead(COL3)==LOW){delay(30);while(digitalRead(COL3)==LOW);return keyMap[2][2];}
+  if(digitalRead(COL4)==LOW){delay(30);while(digitalRead(COL4)==LOW);return keyMap[2][3];}
+
+  digitalWrite(ROW3,HIGH);
+
+  digitalWrite(ROW4,LOW);
+
+  if(digitalRead(COL1)==LOW){delay(30);while(digitalRead(COL1)==LOW);return keyMap[3][0];}
+  if(digitalRead(COL2)==LOW){delay(30);while(digitalRead(COL2)==LOW);return keyMap[3][1];}
+  if(digitalRead(COL3)==LOW){delay(30);while(digitalRead(COL3)==LOW);return keyMap[3][2];}
+  if(digitalRead(COL4)==LOW){delay(30);while(digitalRead(COL4)==LOW);return keyMap[3][3];}
+
+  digitalWrite(ROW4,HIGH);
+
+  return 0;
+}
+
+//================ 初始化 =================
+void setup()
+{
+  Serial.begin(9600);
+
+  tm.setBrightness(5);
+
+  pinMode(RAIN_PIN, INPUT_PULLUP);
+
+  pinMode(DOOR_TOUCH_PIN, INPUT);
+
+  doorServo.attach(SERVO_PIN);
+  doorServo.write(SERVO_CLOSE_ANGLE);
+
+  pinMode(ROW1,OUTPUT);
+  pinMode(ROW2,OUTPUT);
+  pinMode(ROW3,OUTPUT);
+  pinMode(ROW4,OUTPUT);
+
+  pinMode(COL1,INPUT_PULLUP);
+  pinMode(COL2,INPUT_PULLUP);
+  pinMode(COL3,INPUT_PULLUP);
+  pinMode(COL4,INPUT_PULLUP);
+
+  digitalWrite(ROW1,HIGH);
+  digitalWrite(ROW2,HIGH);
+  digitalWrite(ROW3,HIGH);
+  digitalWrite(ROW4,HIGH);
+
+  Serial.println("SmartHome Ready");
+}
+//================ 主循环 =================
+void loop()
+{
+
+//================ 密码开门 =================
+
+char key = scanKey();
+
+if(key != 0)
+{
+  Serial.print("按键:");
+  Serial.println(key);
+
+  if(key == '*')
+  {
+    inputPwd = "";
+    tm.showNumberDec(0);
+  }
+
+  else if(key == '#')
+  {
+    if(inputPwd == correctPwd)
+    {
+      Serial.println("密码正确");
+
+      doorServo.write(SERVO_OPEN_ANGLE);
+
+      delay(300);
+
+      doorIsOpen = true;
+
+      doorOpenTime = millis();
+
+      tm.showNumberDec(1100);
+    }
+    else
+    {
+      Serial.println("密码错误");
+
+      uint8_t err[] =
+      {
+        0x79,
+        0x50,
+        0x50,
+        0x00
+      };
+
+      tm.setSegments(err);
+
+      delay(800);
+    }
+
+    inputPwd = "";
+  }
+
+  else if(key >= '0' && key <= '9')
+  {
+    if(inputPwd.length() < maxPwdLen)
+    {
+      inputPwd += key;
+      tm.showNumberDec(inputPwd.toInt());
+    }
+  }
+}
+
+//================ 自动关门 =================
+
+if(doorIsOpen)
+{
+  if(millis() - doorOpenTime >= OPEN_DURATION)
+  {
+    doorServo.write(SERVO_CLOSE_ANGLE);
+
+    delay(300);
+
+    doorIsOpen = false;
+
+    Serial.println("自动关门");
+  }
+}
+
+//================ 触摸检测 =================
+
+if(!doorIsOpen)
+{
+  int state = readTouch(DOOR_TOUCH_PIN);
+
+  if(state == HIGH)
+  {
+    tm.showNumberDec(0);
+  }
+  else
+  {
+    tm.showNumberDec(1);
+  }
+}
+//================ ASRPRO通信 =================
+
+if(Serial.available())
+{
+
+  String cmd = "";
+
+  while(Serial.available())
+  {
+
+    char c = Serial.read();
+
+
+    if(c!='\n' && c!='\r')
+    {
+      cmd += c;
+    }
+
+
+    delay(2);
+
+  }
+
+
+
+  //================ 语音开门 =================
+
+  if(cmd == "OPEN")
+  {
+
+    Serial.println("OPEN OK");
+
+
+    doorServo.write(SERVO_OPEN_ANGLE);
+
+
+    delay(300);
+
+
+    doorIsOpen = true;
+
+
+    doorOpenTime = millis();
+
+
+    tm.showNumberDec(1100);
+
+
+  }
+
+
+
+  //================ 查询雨滴 =================
+
+  else if(cmd == "QRAIN")
+  {
+
+
+    int rain = digitalRead(RAIN_PIN);
+
+
+
+    if(rain == LOW)
+    {
+
+      Serial.println("RAIN");
+
+    }
+
+    else
+
+    {
+
+      Serial.println("NORAIN");
+
+    }
+
+
+  }
+
+
+}
+delay(80);
+
+}

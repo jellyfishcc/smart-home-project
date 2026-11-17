@@ -29,6 +29,7 @@ class DeviceManager:
         self._lighting_logger = None  # 灯光专用记录回调
         self._socketio = None
         self._last_light_on_time = None  # 记录最近一次开灯时间
+        self._hardware = None  # 硬件对接层（services/hardware_service.py）
 
         if app:
             self.init_app(app)
@@ -44,6 +45,15 @@ class DeviceManager:
 
     def set_lighting_logger(self, logger_func):
         self._lighting_logger = logger_func
+
+    def set_hardware_bridge(self, hardware):
+        """
+        挂接硬件对接层。传 None 表示纯软件模式，所有控制只更新内存状态。
+
+        对接层只需要提供 open_door() / close_door()，返回一个可 JSON 化的字典。
+        DeviceManager 不关心底层是串口、MQTT 还是别的什么，也不 importing 它。
+        """
+        self._hardware = hardware
 
     @property
     def state(self):
@@ -138,13 +148,49 @@ class DeviceManager:
 
         logger.info(f'[Device] {device_name} -> {status} (value={value}, source={source})')
 
-        return {
+        # 出站：把状态变化翻译成硬件命令。
+        # source == 'hardware' 表示这次变化本身就来自板子（例如键盘开门），
+        # 再回发一次会形成 命令 -> 事件 -> 命令 的死循环，必须排除。
+        hardware_info = None
+        if source != 'hardware':
+            hardware_info = self._dispatch_hardware(device_name, status)
+
+        result = {
             'device': device_name,
             'status': status,
             'value': value,
             'state': new_state,
             'source': source,
         }
+        if hardware_info is not None:
+            result['hardware'] = hardware_info
+        return result
+
+    def _dispatch_hardware(self, device_name, status):
+        """
+        把设备状态变化转成硬件命令；返回 None 表示这次变化不需要下发。
+
+        目前只有门禁板接得上：它有 OPEN，新固件还有 CLOSE。
+        环境板固件既没有 Serial.read 也没有上行，等它补齐后在这里加分支即可。
+        """
+        hw = self._hardware
+        if hw is None:
+            return None
+
+        handler = None
+        if device_name == 'door':
+            if status == 'unlocked':
+                handler = getattr(hw, 'open_door', None)
+            elif status == 'locked':
+                handler = getattr(hw, 'close_door', None)
+        if handler is None:
+            return None
+
+        try:
+            return handler()
+        except Exception as e:
+            logger.warning(f'[Device] 硬件下发失败 ({device_name}->{status}): {e}')
+            return {'ok': False, 'error': str(e), 'via': 'hardware'}
 
     def set_light_brightness(self, brightness, source='manual'):
         """设置灯光亮度 (0-100)"""
