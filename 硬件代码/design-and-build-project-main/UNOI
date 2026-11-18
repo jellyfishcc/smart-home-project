@@ -155,35 +155,15 @@ unsigned long msgUntil=0;
 //
 // 板子默认仍然自治：温度 >= 30 开风扇，天黑开灯。
 //
-// 控制权规则（固件与上位机约定）：
-//   软件让设备「开」 -> 板子交出控制权并一直保持，controlFan/controlLamp 不再插手；
-//   软件让设备「关」 -> 板子关掉后立刻交还自治，下一轮 loop 就按传感器重新判断。
-//
-// 为什么开的时候必须彻底锁住：
-//   controlFan() 每个 loop 都会重写 FAN_PIN（30 开 / 28 关），controlLamp()
-//   在天色翻转时也会重写灯带。不锁的话，手动指令活不过一轮 loop。
-// 为什么关的时候必须立刻交还：
-//   关掉之后设备不再影响传感器，自治判断重新变得可信（尤其灯：亮着时会把
-//   自己的光敏照亮，只有在灯关掉之后，光敏读数才代表真实环境）。
-//
-// 协议：
-//   FAN 1 / FAN 0           -> @ACK FAN <1|0>
-//   LAMP 1 60 / LAMP 0      -> @ACK LAMP <1|0> <亮度 0~100>
-//   LAMP AUTO               -> @ACK LAMP AUTO          （显式交还）
-//   MSG ALERT|INTRUDER      -> @ACK MSG 3000           （OLED 临时页，3 秒后自动恢复）
-//   MSG                     -> @ACK MSG 0              （立即恢复）
-//   交还或自治改了状态      -> @EVT CTL AUTO <FAN|LAMP> / @EVT FAN ON|OFF / @EVT LAMP ON|OFF <亮度>
+// 三态控制：1 = manual ON，0 = manual OFF，AUTO = 显式恢复自治。
+// 停止主机应用不会改变板端模式；复位后默认 AUTO，输出先关闭。
+// 每次控制均回 ACK，并补 CTL 模式与执行器输出状态 EVT（不是位置传感器）。
+// FAN AUTO / LAMP AUTO -> @ACK FAN|LAMP AUTO
+// MSG <text> -> @ACK MSG 3000; MSG -> @ACK MSG 0 (OLED).
 
 // 手动接管标志：true = 这个执行器归上位机管，自治逻辑不要动它
 bool fanManual=false;
 bool lampManual=false;
-
-// 交还瞬间屏蔽「变暗 -> 自动开灯」的时长。
-// 灯刚被手动关掉时，光敏会因为灯灭了而由亮转暗，这不是环境变化，
-// 不挡住的话灯会在几十毫秒后自己又亮起来，表现为「关不掉」。
-#define LAMP_SETTLE_MS 2000UL
-
-unsigned long lampSettleUntil=0;
 
 bool lampOn=false;
 
@@ -254,24 +234,16 @@ void applyLamp(bool on,int level)
 }
 
 
-// 显式交还灯：收到 LAMP AUTO 才走这里，按当前光态重算一次。
-// 平时不用它——软件发 LAMP 0 时灯变 OFF 已经等于交还了。
+// Arduino IDE 会生成原型；显式声明也便于主机 fake-I/O 编译验证。
+void controlFan();
+void readLight();
+
 void releaseLamp()
 {
-  if(!lampManual)
-  {
-    return;
-  }
-
   lampManual=false;
-
   applyLamp(darkState,lampLevel);
-
   oldDarkState=darkState;
-
-  Serial.println(F("@EVT CTL AUTO LAMP"));
 }
-
 
 // 状态变了就补报一行，页面才不会和板子各说各话
 void reportStates()
@@ -315,16 +287,25 @@ void reportStates()
 }
 
 
-// 命令执行完先同步一次「已上报」，免得紧跟着再发一条一模一样的 @EVT
-void syncReported()
+// 手动命令也必须回报状态，否则 ACK 被消费后网页仍持有旧开关值。
+void reportControl(bool fan)
 {
-  reportedFan=fanState;
-
-  reportedLamp=lampOn;
-
-  reportedLevel=lampLevel;
+  Serial.print(F("@EVT CTL "));
+  bool manual=fan?fanManual:lampManual;
+  bool on=fan?fanState:lampOn;
+  Serial.print(manual?(on?"MANUAL_ON":"MANUAL_OFF"):"AUTO");
+  Serial.println(fan?" FAN":" LAMP");
+  Serial.print(fan?"@EVT FAN ":"@EVT LAMP ");
+  Serial.print(on?"ON":"OFF");
+  if(!fan)
+  {
+    Serial.print(' ');
+    Serial.print(lampOn?lampLevel:0);
+  }
+  Serial.println();
+  if(fan) reportedFan=fanState;
+  else { reportedLamp=lampOn; reportedLevel=lampLevel; }
 }
-
 
 // 取命令里第 idx 个空格分隔参数（从 1 开始），没有就返回 def
 int cmdArg(const char* cmd,uint8_t idx,int def)
@@ -411,6 +392,14 @@ void handleCmd(const char* cmd)
 
   else if(!strncmp(cmd,"FAN",3)&&(cmd[3]=='\0'||cmd[3]==' '))
   {
+    if(!strcmp(cmd,"FAN AUTO"))
+    {
+      fanManual=false;
+      controlFan();
+      Serial.println(F("@ACK FAN AUTO"));
+      reportControl(true);
+      return;
+    }
     int on=cmdArg(cmd,1,-1);
 
     if(on<0||on>1)
@@ -420,33 +409,27 @@ void handleCmd(const char* cmd)
       return;
     }
 
-    // 开：接管，一直保持；关：先关掉，再立刻交还自治
-    fanManual=(on==1);
+    // ON 和 OFF 都保持手动模式，只有 AUTO 退出。
+    fanManual=true;
 
     applyFan(on==1);
-
-    syncReported();
 
     Serial.print(F("@ACK FAN "));
 
     Serial.println(on);
 
-    if(on==0)
-    {
-      // 本轮稍后的 controlFan() 就会按温度重新判断：
-      // 温度够高它会自己转起来，并通过 @EVT FAN ON 告诉上位机
-      Serial.println(F("@EVT CTL AUTO FAN"));
-    }
+    reportControl(true);
   }
 
   else if(!strncmp(cmd,"LAMP",4)&&(cmd[4]=='\0'||cmd[4]==' '))
   {
     // LAMP AUTO：显式交还，交回光敏自治
-    if(!strncmp(cmd+4," AUTO",5))
+    if(!strcmp(cmd,"LAMP AUTO"))
     {
       releaseLamp();
 
       Serial.println(F("@ACK LAMP AUTO"));
+      reportControl(false);
 
       return;
     }
@@ -463,18 +446,10 @@ void handleCmd(const char* cmd)
       return;
     }
 
-    // 开：接管，一直保持；关：灭灯即交还
-    lampManual=(on==1);
+    // ON/OFF 都保持手动模式。
+    lampManual=true;
 
     applyLamp(on==1,(lv>=0)?lv:(int)lampLevel);
-
-    if(!lampOn)
-    {
-      // 灯灭会让光敏由亮转暗，这不是环境变化，先挡住，别让它自己又亮起来
-      lampSettleUntil=millis()+LAMP_SETTLE_MS;
-    }
-
-    syncReported();
 
     Serial.print(F("@ACK LAMP "));
 
@@ -484,10 +459,7 @@ void handleCmd(const char* cmd)
 
     Serial.println(lampLevel);
 
-    if(!lampOn)
-    {
-      Serial.println(F("@EVT CTL AUTO LAMP"));
-    }
+    reportControl(false);
   }
 
   else if(!strncmp(cmd,"MSG",3)&&(cmd[3]=='\0'||cmd[3]==' '))
@@ -655,7 +627,7 @@ delay(1000);
 // 启动横幅：@BOOT 1 让上位机知道这块板支持串口命令（1 = 协议版本 1）。
 // 老固件打的是裸文本 "Ready"，上位机会当 legacy 处理并改用 QRAIN 保活，
 // 而环境板并没有雨滴模块，链路会被反复误判成离线。
-Serial.println(F("@BOOT 1"));
+Serial.println(F("@BOOT 1 env-tristate-1"));
 
 
 }
@@ -793,8 +765,7 @@ darkState=nowDark;
 void controlFan()
 {
 
-  // 上位机接管期间（FAN 1 之后）不碰引脚，
-  // 否则刚发的 FAN 1 会被这里按 30/28 立刻改回去
+  // manual ON / manual OFF 均不接受自治覆盖。
   if(fanManual)
   {
     return;
@@ -803,12 +774,7 @@ void controlFan()
   if(temperature >= FAN_ON_TEMP)
   {
 
-    fanState=true;
-
-    digitalWrite(
-      FAN_PIN,
-      LOW
-    );
+    applyFan(true);
 
   }
 
@@ -816,12 +782,7 @@ void controlFan()
   else if(temperature <= FAN_OFF_TEMP)
   {
 
-    fanState=false;
-
-    digitalWrite(
-      FAN_PIN,
-      HIGH
-    );
+    applyFan(false);
 
   }
 
@@ -835,7 +796,7 @@ void controlFan()
 void controlLamp()
 {
 
-// 上位机接管期间（LAMP 1 之后）不接管
+// manual ON / manual OFF 均不接受光敏自治覆盖
 if(lampManual)
 {
 return;
@@ -847,14 +808,6 @@ if(darkState!=oldDarkState)
 
 
 oldDarkState=darkState;
-
-
-// 刚把手动关掉的灯交还自治时，光敏会因为灯灭了而由亮转暗。
-// 这不是环境变化，2 秒内忽略「变暗」这一侧，否则灯会自己又亮起来
-if(darkState&&(long)(millis()-lampSettleUntil)<0)
-{
-return;
-}
 
 
 // 交给 applyLamp 统一处理：亮度和状态只有一份，OLED 与上报都读得到

@@ -33,3 +33,15 @@ venv/
 # Database-scoped biometric stores and migration backups (local only)
 /data/backups/
 /data/face_embeddings.*.pkl
+
+# Local runtime and biometric data (keep on disk, never publish).
+/data/*.db
+/data/*.db-*
+/data/*.pkl
+/data/*.yml
+/known_faces/
+/logs/
+.env
+.env.*
+!.env.example
+/config/*.env

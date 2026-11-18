@@ -205,3 +205,23 @@ mode 取值为 manual_on/manual_off/auto；无板端模式回报时页面显示�
 6. 用网页再次 ON → OFF → AUTO；关闭 Flask 前先显式 OFF，观察实体保持关闭。
 若低温 OFF 回包正确但实体仍转，停止继续动作，核查引脚输出与实际模块有效电平。
 此阶段不需要 OPEN，也不需要改 Door。
+
+
+## 2026-11-18 integration with upstream OLED changes
+
+- UNOI source combines `MSG` OLED alerts with manual ON/OFF and explicit AUTO.
+  FAN/LAMP AUTO remains gated on `env-tristate-1`; basic ON/OFF retains legacy ACK support.
+  This source integration does not upload firmware or claim real-board validation.
+- HardwareService retains the OLED message API and restores the AUTO entry points used
+  by DeviceManager and the control page. SensorSimulator does not drive physical fans.
+- `config/hardware.env.example` records both measured USB identities and defaults to
+  simulation with both serial bridges disabled. Source it explicitly; enabling hardware
+  opens ports and may reset boards. Do not use a test identity for real deployment.
+- Databases, face galleries and `known_faces/` are now untracked runtime data.
+  They were present in earlier commits; this change does not rewrite Git history.
+  Before pulling this revision into an existing deployment, stop the application and
+  back up those files outside the checkout: Git can remove previously tracked files
+  when applying their removal. Restore the local files after the update; `.gitignore`
+  then keeps them local. A new clone intentionally has no enrolled people or history.
+- The running Orange Pi checkout was not updated during publication; this integration
+  was validated in a separate worktree. Deployment is a separate step.

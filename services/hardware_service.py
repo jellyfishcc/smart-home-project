@@ -216,6 +216,21 @@ class HardwareService:
             sender = lambda: bridge.send('LAMP', 0)
         return self._command('LAMP', sender, bridge=bridge)
 
+    def set_fan_auto(self):
+        return self._set_env_auto('FAN')
+
+    def set_lamp_auto(self):
+        return self._set_env_auto('LAMP')
+
+    def _set_env_auto(self, name):
+        bridge = self.env_bridge
+        if bridge is None:
+            return self._skipped('环境板未连接')
+        # Older FAN parsers convert AUTO to integer zero. Require explicit capability.
+        if bridge.status().get('firmware') != 'env-tristate-1':
+            return self._skipped('AUTO 需要 env-tristate-1 UNOI 固件')
+        return self._command(name, lambda: bridge.send(name, 'AUTO'), bridge=bridge)
+
     def show_message(self, text, expect_reply=True):
         """
         在环境板 OLED 上临时显示一段文字，固件 3 秒后自动翻回温湿度页。

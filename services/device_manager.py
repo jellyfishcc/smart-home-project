@@ -385,6 +385,10 @@ class DeviceManager:
         真实 DHT11 完成（30 开 / 28 关）；软件侧不再用模拟温度驱动执行器，
         否则页面上的假温度会让风扇自己开关。此方法仅供显式调用保留。
         """
+        if self.get_device('fan').get('mode', 'auto') != 'auto':
+            return False
+        if self._hardware is not None or (getattr(self, 'app', None) and self.app.config.get('SERIAL_ENV_ENABLED')):
+            return False
         if temperature > threshold:
             if not self._state['fan']['on']:
                 self.set_device('fan', 'on', value=2, source='auto')

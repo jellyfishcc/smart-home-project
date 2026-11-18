@@ -43,6 +43,8 @@ struct FakeSerial {
 struct U8G2_SH1106_128X64_NONAME_1_4W_HW_SPI {
  template<class... T> U8G2_SH1106_128X64_NONAME_1_4W_HW_SPI(T...){}
  void begin(){} void setContrast(int){} void clearBuffer(){} void setFont(int){}
+ int getStrWidth(const char* text){return std::strlen(text)*6;}
+ void drawFrame(int,int,int,int){} void drawBox(int,int,int,int){}
  void drawStr(int,int,const char*){} void sendBuffer(){} void firstPage(){}
  void setCursor(int,int){} template<class T> void print(T){} bool nextPage(){return false;}
 };
@@ -79,6 +81,9 @@ int main(){
  darkState=true;handleCmd("LAMP AUTO");assert(!lampManual && lampOn && strip.lit);
  darkState=false;controlLamp();assert(!lampOn);
  darkState=true;controlLamp();assert(lampOn);
+ handleCmd("MSG ALERT|INTRUDER"); assert(msgActive);
+ ticks+=MSG_HOLD_MS+1; displayOLED(); assert(!msgActive);
+ handleCmd("MSG TEST"); assert(msgActive); handleCmd("MSG"); assert(!msgActive);
  auto log=Serial.log.str();
  assert(log.find("@ACK FAN AUTO")!=std::string::npos);
  assert(log.find("@EVT CTL MANUAL_OFF FAN")!=std::string::npos);
