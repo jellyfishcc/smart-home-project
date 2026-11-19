@@ -13,7 +13,7 @@
 </div>
 
 <!-- 状态卡片 -->
-<div class="grid-4" style="margin-bottom:20px;">
+<div class="grid-3" style="margin-bottom:20px;">
     <div class="stat-card">
         <div class="stat-icon temp"><i class="bi bi-thermometer-half"></i></div>
         <div class="stat-info">
@@ -38,32 +38,16 @@
             <div class="stat-trend normal" id="doorStatus">--</div>
         </div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon window"><i class="bi bi-window"></i></div>
-        <div class="stat-info">
-            <h3 id="windowValue">--</h3>
-            <p>窗户状态</p>
-            <div class="stat-trend normal" id="windowStatus">--</div>
-        </div>
-    </div>
 </div>
 
 <!-- 第二行状态卡片 -->
-<div class="grid-4" style="margin-bottom:20px;">
+<div class="grid-3" style="margin-bottom:20px;">
     <div class="stat-card">
         <div class="stat-icon fan"><i class="bi bi-fan"></i></div>
         <div class="stat-info">
             <h3 id="fanValue">--</h3>
             <p>风扇状态</p>
             <div class="stat-trend normal" id="fanStatus">--</div>
-        </div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-icon ac"><i class="bi bi-snow"></i></div>
-        <div class="stat-info">
-            <h3 id="acValue">--</h3>
-            <p>空调状态</p>
-            <div class="stat-trend normal" id="acStatus">--</div>
         </div>
     </div>
     <div class="stat-card">
@@ -154,7 +138,7 @@
             <div class="grid-2" style="gap:12px;">
                 <div style="padding:12px;background:rgba(233,180,85,0.08);border-radius:8px;text-align:center;">
                     <div style="font-size:20px;font-weight:700;color:var(--color-warning);" id="dashLightHours">--</div>
-                    <div style="font-size:11px;color:var(--color-text-light);">今日开灯时长</div>
+                    <div style="font-size:11px;color:var(--color-text-light);">近24小时开灯时长（已确认区间）</div>
                 </div>
                 <div style="padding:12px;background:rgba(107,170,117,0.08);border-radius:8px;text-align:center;">
                     <div style="font-size:20px;font-weight:700;color:var(--color-success);" id="dashLightEnergy">--</div>
@@ -175,5 +159,6 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/analytics_display.js') }}"></script>
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 {% endblock %}

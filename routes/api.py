@@ -18,6 +18,7 @@ from werkzeug.utils import secure_filename
 
 from models import (db, AuthorizedPerson, AccessLog, TemperatureLog, DeviceStatusLog,
                     DetectionRecord, LightingRecord, SentryEvent)
+from services.analytics import device_summary, lighting_intervals, lighting_totals, lighting_daily
 from services.device_manager import device_manager
 from services.sensor_simulator import sensor_simulator
 from services.hardware_service import hardware_service
@@ -749,26 +750,16 @@ def get_device_history():
 def get_device_summary():
     """设备状态统计摘要"""
     hours = request.args.get('hours', 24, type=int)
-    since = datetime.now() - timedelta(hours=hours)
+    since = datetime.now() - timedelta(hours=max(1, hours))
 
-    devices = ['light', 'door', 'window', 'fan', 'ac']
-    summary = {}
-
-    for device in devices:
-        logs = DeviceStatusLog.query.filter(
-            DeviceStatusLog.device_name == device,
-            DeviceStatusLog.recorded_at >= since
-        ).all()
-
-        on_count = sum(1 for l in logs if l.status in ('on', 'unlocked', 'open'))
-        off_count = sum(1 for l in logs if l.status in ('off', 'locked', 'closed'))
-
-        summary[device] = {
-            'total_logs': len(logs),
-            'on_count': on_count,
-            'off_count': off_count,
-            'on_ratio': round(on_count / max(len(logs), 1) * 100, 1),
-        }
+    until = datetime.now()
+    logs = DeviceStatusLog.query.filter(
+        DeviceStatusLog.device_name.in_(('light', 'fan', 'door')),
+        DeviceStatusLog.recorded_at >= since,
+        DeviceStatusLog.recorded_at <= until).all()
+    lighting = LightingRecord.query.filter(
+        LightingRecord.recorded_at >= since, LightingRecord.recorded_at <= until).all()
+    summary = device_summary(logs, lighting)
 
     return jsonify({
         'code': 0,
@@ -857,33 +848,22 @@ def get_lighting_history():
     })
 
 
+def _lighting_window(since, until):
+    rows = LightingRecord.query.filter(
+        LightingRecord.recorded_at >= since, LightingRecord.recorded_at <= until
+    ).order_by(LightingRecord.recorded_at, LightingRecord.id).all()
+    previous = LightingRecord.query.filter(LightingRecord.recorded_at < since).order_by(
+        LightingRecord.recorded_at.desc(), LightingRecord.id.desc()).first()
+    return rows, ([previous] if previous else []) + rows
+
+
 @api_bp.route('/lighting/stats', methods=['GET'])
 def get_lighting_stats():
     """获取灯光使用统计数据"""
     hours = request.args.get('hours', 24, type=int)
-    since = datetime.now() - timedelta(hours=hours)
-
-    records = LightingRecord.query.filter(
-        LightingRecord.recorded_at >= since
-    ).order_by(LightingRecord.recorded_at).all()
-
-    if not records:
-        return jsonify({
-            'code': 0,
-            'message': 'success',
-            'data': {
-                'total_operations': 0,
-                'total_on_seconds': 0,
-                'total_on_hours': 0,
-                'total_energy_wh': 0,
-                'avg_brightness': 0,
-                'max_brightness': 0,
-                'turn_on_count': 0,
-                'turn_off_count': 0,
-                'sources': {},
-                'brightness_chart': [],
-            }
-        })
+    until = datetime.now()
+    since = until - timedelta(hours=max(1, hours))
+    records, timeline = _lighting_window(since, until)
 
     turn_on_count = sum(1 for r in records if r.status == 'on')
     turn_off_count = sum(1 for r in records if r.status == 'off')
@@ -906,24 +886,8 @@ def get_lighting_stats():
         for r in records
     ]
 
-    # 统计总开灯时长和能耗
-    total_on_seconds = 0
-    total_energy_wh = 0.0
-    last_on = None
-    for r in records:
-        if r.status == 'on' and r.brightness > 0:
-            if last_on is None:
-                last_on = r.recorded_at
-        elif r.status == 'off' and last_on is not None:
-            duration = (r.recorded_at - last_on).total_seconds()
-            if 0 < duration < 86400:
-                total_on_seconds += int(duration)
-                # 查找对应的开灯记录来计算能耗
-                on_record = next((x for x in reversed(records[:records.index(r)])
-                                  if x.status == 'on' and x.brightness > 0), None)
-                avg_brightness_val = on_record.brightness if on_record else r.brightness
-                total_energy_wh += LightingRecord.calc_energy(avg_brightness_val, duration)
-            last_on = None
+    intervals, pending_on = lighting_intervals(timeline, since, until)
+    total_on_seconds, total_energy_wh = lighting_totals(intervals)
 
     return jsonify({
         'code': 0,
@@ -931,7 +895,9 @@ def get_lighting_stats():
         'data': {
             'total_operations': len(records),
             'total_on_seconds': total_on_seconds,
-            'total_on_hours': round(total_on_seconds / 3600.0, 2),
+            'total_on_hours': round(total_on_seconds / 3600.0, 4),
+            'duration_basis': 'recorded_intervals',
+            'pending_on': pending_on,
             'total_energy_wh': round(total_energy_wh, 2),
             'avg_brightness': round(sum(r.brightness for r in on_records) / len(on_records), 1) if on_records else 0,
             'max_brightness': max(r.brightness for r in records) if records else 0,
@@ -947,53 +913,10 @@ def get_lighting_stats():
 def get_lighting_daily_summary():
     """获取灯光每日摘要统计"""
     days = request.args.get('days', 7, type=int)
-    since = datetime.now() - timedelta(days=days)
-
-    records = LightingRecord.query.filter(
-        LightingRecord.recorded_at >= since
-    ).order_by(LightingRecord.recorded_at).all()
-
-    # 按日期分组
-    from collections import defaultdict
-    daily = defaultdict(lambda: {
-        'date': '',
-        'total_on_seconds': 0,
-        'turn_on_count': 0,
-        'energy_wh': 0.0,
-        'avg_brightness': 0,
-        'brightness_values': [],
-    })
-
-    last_on = {}
-    for r in records:
-        day = r.recorded_at.strftime('%Y-%m-%d')
-        daily[day]['date'] = day
-
-        if r.status == 'on' and r.brightness > 0:
-            daily[day]['turn_on_count'] += 1
-            daily[day]['brightness_values'].append(r.brightness)
-            if day not in last_on:
-                last_on[day] = r.recorded_at
-        elif r.status == 'off' and day in last_on and last_on[day] is not None:
-            duration = (r.recorded_at - last_on[day]).total_seconds()
-            if 0 < duration < 86400:
-                daily[day]['total_on_seconds'] += int(duration)
-                daily[day]['energy_wh'] += LightingRecord.calc_energy(
-                    r.brightness, duration
-                )
-            last_on[day] = None
-
-    result = []
-    for day in sorted(daily.keys()):
-        d = daily[day]
-        brightness_vals = d['brightness_values']
-        result.append({
-            'date': day,
-            'total_on_hours': round(d['total_on_seconds'] / 3600.0, 2),
-            'turn_on_count': d['turn_on_count'],
-            'energy_wh': round(d['energy_wh'], 2),
-            'avg_brightness': round(sum(brightness_vals) / len(brightness_vals), 1) if brightness_vals else 0,
-        })
+    until = datetime.now()
+    since = until - timedelta(days=max(1, days))
+    _, timeline = _lighting_window(since, until)
+    result = lighting_daily(timeline, since, until)
 
     return jsonify({
         'code': 0,

@@ -69,6 +69,7 @@
         </div>
         <div class="card-body">
             <canvas id="deviceStatusChart" height="200"></canvas>
+            <p id="deviceStatsNote" style="font-size:12px;color:var(--color-text-light);"></p>
         </div>
     </div>
 
@@ -99,7 +100,8 @@
         <div class="stat-icon light"><i class="bi bi-clock-fill"></i></div>
         <div class="stat-info">
             <h3 id="lightTotalHours">--h</h3>
-            <p>累计开灯时长</p>
+            <p>累计开灯时长（所选范围）</p>
+            <small id="lightDurationNote">按已有状态记录计算，不推算无后续记录的开启尾段</small>
         </div>
     </div>
     <div class="stat-card">
@@ -207,6 +209,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/analytics_display.js') }}"></script>
 <script>
 let tempTrendChart = null, deviceStatusChart = null, accessChart = null, humidityChart = null;
 let lightBrightnessChart = null, lightSourceChart = null, lightDailyChart = null;
@@ -356,13 +359,19 @@ async function loadDeviceSummary() {
         }
     } catch (e) {
         console.error('加载设备统计失败:', e);
+        document.getElementById('deviceStatsNote').textContent = '设备统计加载失败，请重试';
     }
 }
 
 function renderDeviceStatusChart(summary) {
     const ctx = document.getElementById('deviceStatusChart').getContext('2d');
-    const deviceNames = { light: '灯光', fan: '风扇', door: '门锁', window: '窗户', ac: '空调' };
-    const devices = Object.keys(summary);
+    const deviceNames = { light: '灯光', fan: '风扇', door: '门锁' };
+    const devices = ['light', 'fan', 'door'];
+    const count = (device, key) => Number((summary[device] || {})[key]) || 0;
+    const total = devices.reduce((sum, d) => sum + count(d, 'total_logs'), 0);
+    document.getElementById('deviceStatsNote').textContent = total
+        ? '按记录条数统计；未知/未完成包含失败命令。门禁命令受理不等于物理门已打开。'
+        : '所选时间范围暂无设备记录';
 
     if (deviceStatusChart) deviceStatusChart.destroy();
 
@@ -371,17 +380,21 @@ function renderDeviceStatusChart(summary) {
         data: {
             labels: devices.map(d => deviceNames[d] || d),
             datasets: [{
-                label: '开启/解锁/打开',
-                data: devices.map(d => summary[d].on_count),
+                label: '开启/解锁记录',
+                data: devices.map(d => count(d, 'on_count')),
                 backgroundColor: 'rgba(107, 170, 117, 0.6)',
                 borderColor: '#6BAA75',
                 borderWidth: 1,
             }, {
-                label: '关闭/锁定/关闭',
-                data: devices.map(d => summary[d].off_count),
+                label: '关闭/锁定记录',
+                data: devices.map(d => count(d, 'off_count')),
                 backgroundColor: 'rgba(224, 122, 122, 0.6)',
                 borderColor: '#E07A7A',
                 borderWidth: 1,
+            }, {
+                label: '未知/未完成记录',
+                data: devices.map(d => count(d, 'unknown_count')),
+                backgroundColor: 'rgba(180,180,180,0.6)',
             }]
         },
         options: {
@@ -393,10 +406,10 @@ function renderDeviceStatusChart(summary) {
 }
 
 function renderDeviceSummaryTable(summary) {
-    const deviceNames = { light: '灯光', fan: '风扇', door: '门锁', window: '窗户', ac: '空调' };
+    const deviceNames = { light: '灯光', fan: '风扇', door: '门锁' };
     const tbody = document.getElementById('deviceSummaryBody');
-    tbody.innerHTML = Object.keys(summary).map(d => {
-        const s = summary[d];
+    tbody.innerHTML = ['light', 'fan', 'door'].map(d => {
+        const s = summary[d] || {total_logs: 0, on_count: 0, on_ratio: 0};
         return `<tr>
             <td>${deviceNames[d] || d}</td>
             <td>${s.total_logs}</td>
@@ -453,7 +466,10 @@ async function loadLightingAnalysis() {
         const statsRes = await API.get(`/api/lighting/stats?hours=${hours}`);
         if (statsRes.code === 0) {
             const d = statsRes.data;
-            document.getElementById('lightTotalHours').textContent = d.total_on_hours + 'h';
+            document.getElementById('lightTotalHours').textContent = formatRecordedDuration(d.total_on_seconds);
+            document.getElementById('lightDurationNote').textContent = d.pending_on
+                ? '末次记录为开启；无后续状态确认的尾段未计入'
+                : '按已有状态记录计算；缺失起始开启记录的时段不推算';
             document.getElementById('lightAvgBrightness').textContent = d.avg_brightness + '%';
             document.getElementById('lightEnergy').textContent = d.total_energy_wh + 'Wh';
             document.getElementById('lightOpCount').textContent = d.total_operations;

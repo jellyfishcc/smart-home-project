@@ -67,17 +67,11 @@ function updateAllDevices(devices) {
     document.getElementById('doorValue').textContent = devices.door.locked ? '锁定' : '已开锁';
     document.getElementById('doorStatus').textContent = devices.door.locked ? '安全锁定' : '已开锁';
 
-    // 窗户
-    document.getElementById('windowValue').textContent = devices.window.closed ? '关闭' : '打开';
-    document.getElementById('windowStatus').textContent = devices.window.closed ? '已关闭' : '已打开';
-
     // 风扇
     document.getElementById('fanValue').textContent = devices.fan.on ? `档${devices.fan.speed}` : '关闭';
     document.getElementById('fanStatus').textContent = devices.fan.on ? '运行中' : '停止';
 
-    // 空调
-    document.getElementById('acValue').textContent = devices.ac.on ? `${devices.ac.temp}°C` : '关闭';
-    document.getElementById('acStatus').textContent = devices.ac.on ? '运行中' : '关闭';
+
 }
 
 // 更新单个设备显示
@@ -88,15 +82,9 @@ function updateDeviceDisplay(device, state) {
     } else if (device === 'door') {
         document.getElementById('doorValue').textContent = state.locked == null ? '位置未知' : (state.locked ? '锁定' : '已开锁');
         document.getElementById('doorStatus').textContent = state.locked == null ? (state.command_state || '未确认') : (state.locked ? '安全锁定' : '已开锁');
-    } else if (device === 'window') {
-        document.getElementById('windowValue').textContent = state.closed ? '关闭' : '打开';
-        document.getElementById('windowStatus').textContent = state.closed ? '已关闭' : '已打开';
     } else if (device === 'fan') {
         document.getElementById('fanValue').textContent = state.on ? `档${state.speed}` : '关闭';
         document.getElementById('fanStatus').textContent = state.on ? '运行中' : '停止';
-    } else if (device === 'ac') {
-        document.getElementById('acValue').textContent = state.on ? `${state.temp}°C` : '关闭';
-        document.getElementById('acStatus').textContent = state.on ? '运行中' : '关闭';
     }
 }
 
@@ -224,7 +212,7 @@ async function loadLightingSummary() {
         const res = await API.get('/api/lighting/stats?hours=24');
         if (res.code === 0) {
             const d = res.data;
-            document.getElementById('dashLightHours').textContent = d.total_on_hours + 'h';
+            document.getElementById('dashLightHours').textContent = formatRecordedDuration(d.total_on_seconds);
             document.getElementById('dashLightEnergy').textContent = d.total_energy_wh + 'Wh';
             document.getElementById('dashLightCount').textContent = d.total_operations;
             document.getElementById('dashLightAvg').textContent = d.avg_brightness + '%';
